@@ -173,9 +173,37 @@ def write_phase0_5_summary(workers: list, results_dir: Path) -> None:
     print(f"[orchestrate] wrote {out_path} (verdict={verdict})")
 
 
+def advance_phase_1(state: dict) -> str:
+    """Phase 1: A2A/AgentBeats wiring -- worker purple agent, Fugu
+    orchestrator purple agent (random-routing dummy), blindfold-chess green
+    judge, all talking over A2A. Gates on the smoke test's marker file
+    (returncode==0), not on the chess result -- Phase 0.5 already gates
+    quality; this phase is purely "does the pipeline run end to end"."""
+    marker = REPORTS_DIR / "phase1_smoke_test_result.json"
+    session = f"{TMUX_SESSION_PREFIX}1_smoke"
+
+    if marker.exists():
+        summary = json.loads(marker.read_text())
+        if summary.get("passed"):
+            return "done"
+        print(f"[orchestrate] phase 1 smoke test previously failed (returncode="
+              f"{summary.get('returncode')}) -- needs a dev session to fix, not a cron retry.")
+        return "blocked"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 1 smoke test still running in tmux session '{session}'")
+        return "in_progress"
+
+    log_path = LOG_DIR / "phase1_agentbeats_smoke.log"
+    cmd = f"cd {PROJECT_DIR} && {VENV_PYTHON} scripts/phase1_agentbeats_smoke_test.py >> {log_path} 2>&1"
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
+    "1": advance_phase_1,
 }
 
 

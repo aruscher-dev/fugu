@@ -44,7 +44,7 @@ def run_floor_check_for_worker(short_id: str, model_id: str, n_games: int, max_p
     print(f"\n=== Floor check: {short_id} ({model_id}) ===", flush=True)
     check_disk_budget()  # models here are pre-cached, but be defensive anyway
 
-    worker = LocalWorker(LocalWorkerConfig(model_id=model_id, max_new_tokens=32, temperature=0.4))
+    worker = LocalWorker(LocalWorkerConfig(model_id=model_id, max_new_tokens=200, temperature=0.4))
     games = []
 
     for g in range(n_games):
@@ -52,7 +52,7 @@ def run_floor_check_for_worker(short_id: str, model_id: str, n_games: int, max_p
         scorer = StockfishScorer(skill_level=STOCKFISH_FLOOR_SKILL, depth=8)
 
         def move_fn(messages):
-            return worker.generate(messages, max_new_tokens=32)
+            return worker.generate(messages, max_new_tokens=200)
 
         def engine_move_fn(board):
             return scorer.best_move(board)

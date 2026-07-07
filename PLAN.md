@@ -41,7 +41,16 @@ none of it is required (this repo vendors what it needs).
 - **Autonomous resumption on credit/quota reset.** Since this is a multi-day project and
   the operating agent (me) may hit its own usage limits mid-run, work must be structured
   in resumable, checkpointed phases with idempotent scripts, so a periodic scheduled
-  wakeup (or plain host `cron`) can check status and continue rather than restart.
+  wakeup (or plain host `cron`) can check status and continue rather than restart. A
+  cloud-scheduled dev routine (writes/pushes code only, no GPU/host access) may
+  supplement this for the "write new phase code" half of resumption; the "run it on the
+  GPU" half still has to be this host's own cron+tmux (see STATUS.md's "IMPORTANT
+  limitation" section for exactly where that split falls).
+- **Inter-agent communication over A2A, AgentBeats-style.** All agent-to-agent
+  interaction (worker↔orchestrator, orchestrator↔green judge) uses the A2A protocol,
+  following UC Berkeley RDI's AgentBeats competition conventions as closely as
+  reasonable, rather than bespoke in-process calls or a custom HTTP API. See
+  "Architecture" below for the concrete purple/green agent breakdown.
 
 ## Ground truth from the ORIGINAL host (verify all of this again on the new machine!)
 
@@ -114,9 +123,34 @@ none of it is required (this repo vendors what it needs).
   data collection).
 - **SVF adaptation:** hand-rolled, targeting only `o_proj`/`down_proj` of the last 2-3
   orchestrator backbone layers.
-- **Router server:** a small FastAPI process exposing an OpenAI-compatible
-  `/v1/chat/completions`, doing hidden-state→logits→pick-worker→delegate→return, logging
-  `(game_id, move_num, worker_id, logits)` for reward attribution.
+- **Inter-agent communication: A2A protocol, AgentBeats-style (added Phase 1, per user
+  request).** Originally planned as a bespoke FastAPI OpenAI-compatible router server;
+  replaced with a proper agent-to-agent architecture matching UC Berkeley RDI's
+  AgentBeats competition conventions (course material at
+  `~/Team/AgentBeats_bench`, esp. `finance_economics/tutorial-agent-beats-comp` and
+  `games_virtual_environments/build_what_i_mean/pragmatic_builder` as the reference
+  implementations this project's `src/open_fugu/agentbeats/` vendors from, MIT license):
+  - Each worker LLM is its own **A2A purple agent** (`a2a/worker_agent.py`), serving an
+    `AgentCard` + a `blindfold_chess_move` skill, built on `a2a-sdk` (pinned `0.3.5` to
+    match the course reference code's API — the PyPI-latest `1.1.0` has since renamed/
+    moved several modules, e.g. `a2a.server.apps` no longer exists there).
+  - The Fugu orchestrator is *itself* an A2A purple agent (`a2a/orchestrator_agent.py`):
+    the green judge only ever talks to it, never to a worker directly; internally it
+    dispatches to a worker over A2A too (agent-to-agent, not an in-process call). Phase 1
+    scope: random routing per game. Real per-query routing (matching the paper) needs
+    the trained selection head (Phase 4) and a stateless full-transcript-forwarding
+    redesign, since worker agents keep conversation state server-side keyed by A2A
+    `context_id` — switching workers mid-game would silently drop context otherwise.
+  - Evaluation (Phase 0.5 floor check, Phase 5 matches) is modeled as an AgentBeats
+    **green (judge) agent** (`a2a/chess_green_agent.py`): receives an `EvalRequest`
+    naming the orchestrator's URL, plays blindfold games with the real board/Stockfish
+    scoring kept entirely server-side (never crosses the A2A wire, preserving
+    blindfold-ness), returns an `EvalResult` artifact.
+  - Scenarios are TOML-driven (`config/scenario_blindfold_chess_smoke.toml`) and launched
+    via the vendored `agentbeats.run_scenario` + `client_cli`, matching the competition's
+    own submission format (green agent + participants + config) — this also means the
+    project could, with a Dockerfile and a registration step, be submitted to the actual
+    AgentBeats platform (agentbeats.dev) largely as-is.
 
 ## Training recipe
 
@@ -140,25 +174,34 @@ open_fugu/
   PLAN.md, STATUS.md          # this file + the living status doc
   pyproject.toml, .env (HF_HOME=, STOCKFISH_PATH=, ROUTER_PORT=)
   state.json                   # phase status for orchestrate.py
-  config/{workers,orchestrator,sft,cmaes}.yaml
+  config/{workers,orchestrator,sft,cmaes}.yaml, scenario_blindfold_chess_smoke.toml
+  reports/     # tracked (NOT gitignored) -- small JSON summaries so the cloud dev
+               # routine can see gate verdicts without access to this host's logs/
   vendor/llm_chess/             # fresh clone + blindfold-mode patch (gitignored, re-clone)
   bin/{stockfish, stockfish-wrapper.sh}   # gitignored, host-specific binary
   src/open_fugu/
-    models/{local_worker, worker_backend,orchestrator,svf,router_server}.py
+    models/{local_worker, worker_backend,svf}.py
     reward/stockfish_scorer.py
-    chess_blindfold/harness.py
+    chess_blindfold/harness.py       # sync + async (play_blindfold_vs_engine[_async])
+    agentbeats/   # vendored MIT-licensed AgentBeats tutorial SDK helpers (models,
+                  # client, tool_provider, green_executor, run_scenario, client_cli)
+    a2a/          # this project's own agents, built on the vendored SDK above:
+      worker_agent.py         # purple agent wrapping one LocalWorker
+      orchestrator_agent.py   # purple agent-of-agents (Fugu backbone; random routing
+                               # in Phase 1, learned selection head from Phase 4)
+      chess_green_agent.py    # green judge: blindfold chess vs. Stockfish over A2A
     data/{chess_positions,collect_sft_data}.py
     train/{train_sft,train_cmaes}.py
     eval/{run_eval_matches,aggregate_metrics}.py
     gtbench_ext/{local_transformers_model,orchestrator_router_model}.py
   scripts/
     disk_guard.py, phase0_5_blindfold_floor_check.py,
-    phase1_worker_router_smoke_test.py, phase2_stockfish_setup_sanity.py,
+    phase1_agentbeats_smoke_test.py, phase2_stockfish_setup_sanity.py,
     phase3_collect_sft_data.py, phase4_train_sft.py,
     phase5_baseline_and_fugu_matches.py, phase6_eval_report.py,
     phase7_cmaes_kuhn_pilot.py (stretch), phase8_cmaes_chess_pilot.py (stretch),
     phase9_gtbench_extension.py (stretch),
-    orchestrate.py, status.py
+    orchestrate.py, status.py, install_crontab.sh
   logs/        # gitignored — tmux session stdout+stderr per phase
   checkpoints/ # gitignored — SFT head+SVF weights, CMA-ES generation snapshots
 ```
@@ -169,7 +212,7 @@ open_fugu/
 |---|---|---|
 | 0 | Env setup (deps, HF_HOME, Stockfish binary, clone llm_chess, disk_guard.py, chmod 700 everything) | 0.5-1 day |
 | 0.5 | **Floor check**: 5-10 quick blindfold games per worker — gate viability before committing GPU-hours | 0.5 day |
-| 1 | Worker backend + router server (random-routing dummy orchestrator first), blindfold-mode fork of llm_chess | 1-2 days |
+| 1 | Worker/orchestrator/green judge as A2A agents (AgentBeats-style, random-routing dummy orchestrator first) | 1-2 days |
 | 2 | Stockfish reward pipeline + sanity check against known games | 0.5-1 day |
 | 3 | SFT data collection (300-600 positions × 3-4 samples/worker) | 2-4 days background (~10-20 GPU-hrs) |
 | 4 | SVF/head implementation + SFT training | 0.5-1 day |

@@ -1,0 +1,26 @@
+# Phase 1 smoke test: one worker agent + the orchestrator (random-routing
+# dummy, trivial with a single worker) + the blindfold-chess green judge,
+# all talking over A2A. Short/cheap on purpose (2 short games) -- this is a
+# pipeline-wiring check, not a real evaluation run (that's Phase 5).
+
+[green_agent]
+endpoint = "http://127.0.0.1:9009"
+cmd = "/Data/.venv/bin/python -m open_fugu.a2a.chess_green_agent --host 127.0.0.1 --port 9009"
+
+[[participants]]
+role = "fugu_orchestrator"
+endpoint = "http://127.0.0.1:9200"
+cmd = "/Data/.venv/bin/python -m open_fugu.a2a.orchestrator_agent --workers qwen2.5-7b=http://127.0.0.1:9101 --host 127.0.0.1 --port 9200 --seed 0"
+
+[config]
+n_games = 2
+max_plies = 8
+stockfish_skill_level = 1
+
+# Note: the worker agent (qwen2.5-7b on port 9101) is NOT declared here as a
+# [[participants]] entry -- only agents the GREEN judge talks to directly go
+# in participants (per the EvalRequest.participants contract). It's started
+# separately by scripts/phase1_agentbeats_smoke_test.py alongside this
+# scenario, since run_scenario.py's readiness-wait only checks
+# green_agent + participants, and the orchestrator itself depends on the
+# worker already being up when it receives its first request.
