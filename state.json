@@ -5,12 +5,12 @@
       "note": "venv deps, disk_guard baseline, vendor/llm_chess clone, Stockfish 18 + wrapper all verified on this host (lotte.polytechnique.fr)"
     },
     "0.5": {
-      "status": "in_progress",
+      "status": "done",
       "note": "blindfold floor check -- gates whether Phase 3+ is worth running"
     },
     "1": {
-      "status": "not_started",
-      "note": "worker backend + FastAPI router server (dummy random-routing orchestrator first)"
+      "status": "in_progress",
+      "note": "A2A/AgentBeats wiring: worker purple agent + Fugu orchestrator purple agent (random-routing dummy) + blindfold-chess green judge, all over A2A -- gated on the smoke test's marker file, not on chess quality"
     },
     "2": {
       "status": "not_started",
@@ -59,5 +59,5 @@
     "9"
   ],
   "host": "lotte.polytechnique.fr",
-  "last_orchestrate_run": "2026-07-07T06:33:49.170950+00:00"
+  "last_orchestrate_run": "2026-07-07T06:36:06.257041+00:00"
 }
