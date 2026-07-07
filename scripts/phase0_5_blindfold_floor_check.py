@@ -58,14 +58,35 @@ def run_floor_check_for_worker(short_id: str, model_id: str, n_games: int, max_p
             return scorer.best_move(board)
 
         t0 = time.time()
-        result = play_blindfold_vs_engine(
-            move_fn=move_fn,
-            llm_color=llm_color,
-            opening_uci_moves=DEFAULT_OPENING,
-            engine_best_move_fn=engine_move_fn,
-            scorer=scorer,
-            max_plies=max_plies,
-        )
+        try:
+            result = play_blindfold_vs_engine(
+                move_fn=move_fn,
+                llm_color=llm_color,
+                opening_uci_moves=DEFAULT_OPENING,
+                engine_best_move_fn=engine_move_fn,
+                scorer=scorer,
+                max_plies=max_plies,
+            )
+        except Exception as e:
+            # A single game/model quirk (e.g. a chat-template edge case)
+            # shouldn't take down the whole floor check run -- record it and
+            # move on to the next game/worker.
+            elapsed = time.time() - t0
+            scorer.close()
+            games.append({
+                "game_idx": g,
+                "llm_color": "white" if llm_color == chess.WHITE else "black",
+                "result": "*",
+                "termination": f"error: {type(e).__name__}: {e}",
+                "n_plies": 0,
+                "legal_move_rate": None,
+                "mean_acpl": None,
+                "blunder_rate": None,
+                "elapsed_sec": elapsed,
+                "final_fen": None,
+            })
+            print(f"  game {g}: CRASHED ({type(e).__name__}: {e}), elapsed={elapsed:.1f}s", flush=True)
+            continue
         elapsed = time.time() - t0
         scorer.close()
 
@@ -82,6 +103,9 @@ def run_floor_check_for_worker(short_id: str, model_id: str, n_games: int, max_p
             "blunder_rate": (sum(p.is_blunder for p in legal_plies) / len(legal_plies)) if legal_plies else None,
             "elapsed_sec": elapsed,
             "final_fen": result.final_fen,
+            # Truncated raw replies -- essential for debugging why a move was
+            # judged illegal (unparseable text vs. a genuinely illegal move).
+            "raw_replies": [p.raw_reply[:300] for p in result.plies],
         })
         print(f"  game {g}: {result.result} ({result.termination}), "
               f"legal_rate={games[-1]['legal_move_rate']}, "

@@ -97,11 +97,22 @@ def play_blindfold_vs_engine(
         board.push_uci(mv)
 
     color_name = "white" if llm_color == chess.WHITE else "black"
-    messages: List[dict] = [
-        {"role": "user", "content": format_opening_prompt(color_name, opening_uci_moves)}
-    ]
+    opening_prompt = format_opening_prompt(color_name, opening_uci_moves)
     plies: List[PlyRecord] = []
     ply_no = len(opening_uci_moves)
+
+    # If the engine moves immediately after the fixed opening (LLM plays
+    # black), fold that first engine move into the SAME initial user turn
+    # instead of appending a second, separate user message right after it --
+    # two consecutive "user" messages with no assistant turn between them
+    # breaks strict chat templates' turn-alternation validation (crashes
+    # Mistral's template outright, silently degrades Qwen's).
+    if board.turn != llm_color:
+        first_engine_move = engine_best_move_fn(board)
+        board.push_uci(first_engine_move)
+        opening_prompt += f" Opponent played {first_engine_move}. What is your move?"
+
+    messages: List[dict] = [{"role": "user", "content": opening_prompt}]
 
     def llm_turn() -> PlyRecord:
         nonlocal ply_no
@@ -126,12 +137,6 @@ def play_blindfold_vs_engine(
         board.push_uci(mv)
         messages.append({"role": "user", "content": mv})
         return mv
-
-    # If it's the engine's turn right after the opening (LLM plays the other color),
-    # let the engine move first so the LLM's setup prompt is immediately followed
-    # by something to react to on its next turn.
-    if board.turn != llm_color:
-        engine_turn()
 
     while len(board.move_stack) < max_plies + len(opening_uci_moves) and not board.is_game_over():
         rec = llm_turn()

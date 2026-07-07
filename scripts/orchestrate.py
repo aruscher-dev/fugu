@@ -15,6 +15,21 @@ exists. Phases without a script yet (see state.json's "not_started" phases)
 require a human/agent development session to write the phase script -- cron
 alone cannot invent new code. When orchestrate.py reaches such a phase it logs
 that fact and exits cleanly (no error, no busy-loop).
+
+Note for a future dev session (human or the scheduled cloud dev routine, which
+has no GPU/host access and can only write+push code): to make a newly-written
+phase script actually runnable by this cron loop, add a matching
+`advance_phase_N(state)` function here (following the `advance_phase_0_5`
+pattern -- check for the phase's output artifact, launch its script into a
+detached tmux session if not already running, return "done"/"in_progress")
+and register it in PHASE_ADVANCERS below. A phase script committed without an
+advancer just sits there; orchestrate.py will still report "no script yet"
+for it.
+
+Also pulls the latest code via `git pull --ff-only` at the start of each run
+(so phases written by the cloud dev routine get picked up automatically) and
+pushes state.json + reports/ (small tracked status summaries) at the end, so
+that routine can see current progress without needing access to this host.
 """
 from __future__ import annotations
 
@@ -28,9 +43,51 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATE_PATH = PROJECT_DIR / "state.json"
 LOG_DIR = PROJECT_DIR / "logs"
+REPORTS_DIR = PROJECT_DIR / "reports"  # tracked (not gitignored) -- small summaries
 VENV_PYTHON = "/Data/.venv/bin/python"
 
 TMUX_SESSION_PREFIX = "openfugu-phase"
+
+
+def _run_git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(PROJECT_DIR), *args],
+                           capture_output=True, text=True)
+
+
+def git_pull_if_clean() -> None:
+    """Pick up new phase code written by the cloud dev routine. Only pulls
+    when the working tree is clean, so a crashed run's local edits (there
+    shouldn't be any -- orchestrate.py only ever touches state.json/reports/)
+    never get clobbered by a remote merge."""
+    status = _run_git("status", "--porcelain")
+    if status.stdout.strip():
+        print("[orchestrate] working tree not clean, skipping git pull this run")
+        return
+    result = _run_git("pull", "--ff-only", "origin", "main")
+    if result.returncode != 0:
+        print(f"[orchestrate] git pull failed (non-fatal, continuing with local state):\n{result.stderr}")
+    elif "Already up to date" not in result.stdout:
+        print(f"[orchestrate] git pull: {result.stdout.strip()}")
+
+
+def git_commit_and_push(message: str) -> None:
+    """Push state.json/reports/ updates so the cloud dev routine can see
+    current progress (e.g. the Phase 0.5 gate verdict) without needing access
+    to this host. Scoped to state.json + reports/ -- never touches gitignored
+    host-specific paths (bin/, logs/, vendor/, checkpoints/)."""
+    _run_git("add", "state.json", str(REPORTS_DIR))
+    diff = _run_git("diff", "--cached", "--quiet")
+    if diff.returncode == 0:
+        return  # nothing staged
+    commit = _run_git("commit", "-m", message)
+    if commit.returncode != 0:
+        print(f"[orchestrate] git commit failed:\n{commit.stderr}")
+        return
+    push = _run_git("push", "origin", "main")
+    if push.returncode != 0:
+        print(f"[orchestrate] git push failed (non-fatal):\n{push.stderr}")
+    else:
+        print(f"[orchestrate] pushed status update: {message}")
 
 
 def load_state() -> dict:
@@ -69,6 +126,7 @@ def advance_phase_0_5(state: dict) -> str:
 
     reports_done = [w for w in default_workers if (results_dir / f"{w}.json").exists()]
     if len(reports_done) == len(default_workers):
+        write_phase0_5_summary(default_workers, results_dir)
         return "done"
 
     if tmux_session_exists(session):
@@ -88,6 +146,33 @@ def advance_phase_0_5(state: dict) -> str:
     return "in_progress"
 
 
+def write_phase0_5_summary(workers: list, results_dir: Path) -> None:
+    """Compact, tracked (non-gitignored) gate-verdict summary so the cloud
+    dev routine (no access to this host's logs/) can decide whether Phase 1
+    is worth building at all."""
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.chmod(0o700)
+    per_worker = {}
+    for w in workers:
+        r = json.loads((results_dir / f"{w}.json").read_text())
+        per_worker[w] = r["summary"]
+    verdict = "PASS" if all(
+        (s.get("mean_legal_move_rate") or 0) > 0.5
+        for s in per_worker.values()
+    ) else "REVIEW_NEEDED"
+    summary = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "workers": per_worker,
+        "verdict": verdict,
+        "note": ("verdict is a rough heuristic (mean_legal_move_rate > 0.5) -- "
+                 "read per-worker numbers before deciding to build Phase 1"),
+    }
+    out_path = REPORTS_DIR / "phase0_5_summary.json"
+    out_path.write_text(json.dumps(summary, indent=2))
+    out_path.chmod(0o600)
+    print(f"[orchestrate] wrote {out_path} (verdict={verdict})")
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
@@ -95,6 +180,7 @@ PHASE_ADVANCERS = {
 
 
 def main():
+    git_pull_if_clean()
     state = load_state()
     advanced_any = False
 
@@ -124,6 +210,7 @@ def main():
             break
 
     save_state(state)
+    git_commit_and_push(f"orchestrate: automated status sync ({datetime.now(timezone.utc).isoformat()})")
     if not advanced_any:
         print("[orchestrate] no phase completed this run")
 
