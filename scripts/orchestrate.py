@@ -81,8 +81,8 @@ def advance_phase_0_5(state: dict) -> str:
     # crash-and-cron-relaunch just picks up remaining workers.
     log_path = LOG_DIR / "phase0_5_floor_check.log"
     cmd = (
-        f"cd {PROJECT_DIR} && {VENV_PYTHON} scripts/phase0_5_blindfold_floor_check.py "
-        f">> {log_path} 2>&1"
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/phase0_5_blindfold_floor_check.py >> {log_path} 2>&1"
     )
     tmux_launch(session, cmd)
     return "in_progress"

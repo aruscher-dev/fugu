@@ -6,13 +6,22 @@ validated torch/transformers/peft/trl versions already installed).
 from __future__ import annotations
 
 import os
+
+# Must be set before any huggingface_hub/transformers import -- both cache the
+# resolved HF_HOME at import time, so setting this any later is silently
+# ignored. HF_HUB_DISABLE_XET turns off the newer "xet" fast-download backend,
+# whose native (Rust) cache-path default ignores HF_HOME entirely and writes
+# to ~/.cache/huggingface/xet regardless -- that blew through this host's NFS
+# home quota during Phase 0.5. Plain HTTP download is slower but reliably
+# respects HF_HOME.
+os.environ.setdefault("HF_HOME", "/Data/.hf_cache")
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 from dataclasses import dataclass
 from typing import List, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-
-os.environ.setdefault("HF_HOME", "/Data/.hf_cache")
 
 
 @dataclass
