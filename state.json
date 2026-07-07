@@ -1,0 +1,63 @@
+{
+  "phases": {
+    "0": {
+      "status": "done",
+      "note": "venv deps, disk_guard baseline, vendor/llm_chess clone, Stockfish 18 + wrapper all verified on this host (lotte.polytechnique.fr)"
+    },
+    "0.5": {
+      "status": "in_progress",
+      "note": "blindfold floor check -- gates whether Phase 3+ is worth running"
+    },
+    "1": {
+      "status": "not_started",
+      "note": "worker backend + FastAPI router server (dummy random-routing orchestrator first)"
+    },
+    "2": {
+      "status": "not_started",
+      "note": "Stockfish reward pipeline sanity check (ad-hoc smoke test already passed manually; formal script not yet written)"
+    },
+    "3": {
+      "status": "not_started",
+      "note": "SFT data collection (300-600 positions x 3-4 samples/worker)"
+    },
+    "4": {
+      "status": "not_started",
+      "note": "SVF + selection head implementation, SFT training"
+    },
+    "5": {
+      "status": "not_started",
+      "note": "baseline + Open-Fugu blindfold matches"
+    },
+    "6": {
+      "status": "not_started",
+      "note": "evaluation report"
+    },
+    "7": {
+      "status": "not_started",
+      "note": "(stretch) CMA-ES kuhn_poker pilot"
+    },
+    "8": {
+      "status": "not_started",
+      "note": "(stretch) CMA-ES truncated blindfold chess"
+    },
+    "9": {
+      "status": "not_started",
+      "note": "(stretch) gtbench extension"
+    }
+  },
+  "phase_order": [
+    "0",
+    "0.5",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+  ],
+  "host": "lotte.polytechnique.fr",
+  "last_orchestrate_run": "2026-07-07T05:32:24.613662+00:00"
+}

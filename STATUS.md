@@ -1,48 +1,54 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-07, on the original host, mid-Phase-0/0.5, right before migrating
-to a new SSH host (another user needed the original machine and machine-sharing was
-ruled out). See `PLAN.md` for the full approved plan this implements.
+Last updated: 2026-07-07, on the new host (`lotte.polytechnique.fr`), Phase 0 complete,
+Phase 0.5 running autonomously. See `PLAN.md` for the full approved plan this implements.
 
-## What's actually done (verified working on the ORIGINAL host)
+## What's actually done (verified working on THIS host, lotte.polytechnique.fr)
 
-- [x] Project scaffold at (originally) `/Data/alfred.ruscher/open_fugu`, `chmod 700`
-      throughout, symlinked from `~/open_fugu` for convenience.
-- [x] `scripts/disk_guard.py` — tracks project dir size + incremental HF-cache growth
-      against a 100GB cap (80GB warn). Baseline HF-cache manifest was written
-      (`config/hf_cache_manifest_baseline.json`, **gitignored, host-specific, must be
-      regenerated on the new host** via `write_baseline_manifest()` BEFORE any new model
-      downloads there).
-- [x] Dependencies installed into the project venv: `bitsandbytes`, `python-chess`
-      (→ `chess` 1.11.2), `cma` 4.4.4, `fastapi`, `uvicorn`, `httpx`, `pyyaml`, `pandas`,
-      `scipy`, `ag2` 0.14.0 (autogen). Verified NO downgrade of the pre-existing
-      torch 2.11.0+cu128 / transformers 5.8.1 / peft 0.19.1 / trl 0.29.1 stack.
-- [x] Stockfish 18 (avx2 build) downloaded and working via `bin/stockfish-wrapper.sh`
-      (LD_LIBRARY_PATH workaround for old system libstdc++ — **host-specific, re-verify
-      on new host**, see PLAN.md). Confirmed working end-to-end with `python-chess`
-      (`chess.engine.SimpleEngine.popen_uci`).
-- [x] `vendor/llm_chess` — fresh clone of `maxim-saplin/llm_chess` upstream (gitignored;
-      re-clone with `git clone https://github.com/maxim-saplin/llm_chess.git vendor/llm_chess`
-      on the new host).
-- [x] `src/open_fugu/reward/stockfish_scorer.py` — `StockfishScorer` class: per-move
-      centipawn-loss scoring (`score_move`), best-move query (`best_move`), blunder/
-      mistake thresholds (300/100cp). Reusable across floor-check, SFT data collection,
-      and final eval.
-- [x] `src/open_fugu/chess_blindfold/harness.py` — **custom-built** blindfold chess game
-      loop implementing the Fugu paper's exact Appendix B.2 / Listing 1 protocol (fixed
-      opening given once, then only the opponent's last UCI move each turn, no board/FEN/
-      legal-move-list ever shown). Deliberately NOT built on top of vendored llm_chess's
-      `AutoGen`/`ConversableAgent` machinery — see "Design decision" below for why.
-- [x] `src/open_fugu/models/local_worker.py` — `LocalWorker` class loading any HF chat
-      model via transformers + bitsandbytes NF4 4-bit, `.generate(messages)` taking a
-      plain OpenAI-style message list. `CANDIDATE_WORKERS` dict maps short ids to HF repo
-      ids for the whole planned pool (mid + small tier).
-- [x] `scripts/phase0_5_blindfold_floor_check.py` — written but **NOT YET RUN** (session
-      interrupted by the host migration). Plays N short blindfold games per candidate
-      worker vs. skill-limited local Stockfish, reports legal-move rate / ACPL / blunder
-      rate per worker to `logs/phase0_5_floor_check/<worker>.json`.
-- [x] Git repo initialized locally, 2 commits, pushed to
-      `https://github.com/Warsea12-ai/fugu.git` (private) once SSH auth was set up.
+- [x] Repo cloned to `/Data/alfred.ruscher/fugu`, `chmod 700` throughout (dirs 700,
+      files 600). Home-dir NFS quota re-checked: same 30GB hard cap, ~28GB already used
+      (shared across hosts via `alpha.polytechnique.fr:/students`) — confirms project must
+      stay on `/Data` (1TB local disk, 713GB free at time of writing), never `$HOME`.
+- [x] Venv at `/Data/.venv` (shared base image: torch 2.11.0+cu128, transformers 5.8.1,
+      peft 0.19.1, trl 0.29.1 already present, exact same versions as the original host).
+      Installed this project's extra deps: `bitsandbytes` 0.49.2, `chess` 1.11.2 (via
+      `python-chess`), `cma` 4.4.4, `ag2` 0.14.0 (autogen) — `fastapi`/`uvicorn`/`httpx`/
+      `pyyaml`/`pandas`/`scipy` were already present. No downgrade of the base ML stack.
+- [x] `scripts/disk_guard.py` baseline manifest regenerated for this host's
+      `/Data/.hf_cache` (only 4 unrelated video-model dirs, 6.4GB — none of the chess
+      worker LLMs are pre-cached here, unlike the original host).
+- [x] `vendor/llm_chess` re-cloned fresh from `maxim-saplin/llm_chess`.
+- [x] Stockfish 18 — this host has AVX-512 (better than the original host's AVX2-only),
+      used the `stockfish-ubuntu-x86-64-avx512` build. Same `GLIBCXX_3.4.30' not found`
+      issue as the original host; same fix works (`/usr/local/gcc-15.1.0/lib64` also
+      exists here — shared cluster software). `bin/stockfish-wrapper.sh` updated
+      accordingly and reverified end-to-end with `python-chess`.
+- [x] **`state.json` + `scripts/orchestrate.py` + `scripts/status.py` +
+      `scripts/install_crontab.sh` — the autonomous-resumption mechanism, built this
+      session.** `orchestrate.py` reads `state.json`, advances the first non-done phase
+      by one idempotent step, launches long GPU work into a detached `tmux` session, and
+      exits (never blocks). A plain user crontab entry (`*/15 * * * *`, no root) runs it
+      unattended — installed and confirmed active via `crontab -l`. This is what makes
+      progress survive SSH/laptop disconnects: cron and tmux are both host daemons,
+      independent of any agent/Claude Code session.
+- [x] Phase 0.5 floor check **launched** (tmux session `openfugu-phase0_5`, log at
+      `logs/phase0_5_floor_check.log`) — downloading + testing `qwen2.5-7b`, `mistral-7b`,
+      `deepseek-r1-distill-qwen-7b` (none pre-cached on this host, ~15GB download each).
+      Cron will detect completion and mark phase 0.5 `done` in `state.json` automatically;
+      or run `scripts/status.py` any time for a manual check.
+
+## IMPORTANT limitation of the autonomous mechanism — read this before assuming too much
+
+`cron` + `tmux` keep **already-written, already-launched** work running/retrying without
+any agent session. They **cannot write new code**. Phases with no script yet (1, 2, 3+ —
+see `state.json`) will make `orchestrate.py` log "no script yet" and exit cleanly, idling
+harmlessly, until a human/agent development session writes that phase's script. So:
+- Long GPU jobs (like the current Phase 0.5 download+eval): survive disconnects AND
+  Claude-Code-session/token gaps, no action needed.
+- Building Phase 1 onward (router server, SFT data collection, SVF training, eval): needs
+  an active Claude Code session again — there's no way around that with the constraint of
+  staying on this one host and not using any Anthropic-managed remote scheduling mechanism
+  (which was explicitly rejected earlier as violating "one host at a time").
 
 ## Design decision worth knowing: why NOT to reuse llm_chess's AutoGen agents
 
@@ -68,35 +74,23 @@ network-of-networks pattern (query N LLMs, synthesize with one more) — this is
 ready-made **majority-vote/ensemble baseline** for Phase 5/6 evaluation, if the
 non-blindfold interaction style is ever wanted for a non-blindfold comparison arm.
 
-## Exact next steps for a fresh session on the new host
+## Exact next steps for the next session (on this host, or handoff to a new one)
 
-1. **Re-verify the ground truth section of PLAN.md on the new machine** — GPU, disk
-   quotas (check home-dir quota FIRST, this bit us once already), HF cache location/
-   contents, venv setup, Stockfish libstdc++ compatibility. Do not assume any of it
-   carries over just because the new host is "the same power."
-2. `git clone` this repo (`https://github.com/Warsea12-ai/fugu.git`) onto the new host,
-   `chmod 700` everything immediately after clone.
-3. Recreate the venv and reinstall dependencies (see PLAN.md's package list). Re-run
-   `scripts/disk_guard.py`'s `write_baseline_manifest()` BEFORE downloading/using any
-   models, so the 100GB cap tracks only this project's new usage on the new host.
-4. Re-clone `vendor/llm_chess` (gitignored, see command above).
-5. Re-download or locate Stockfish 18 for the new host's CPU, wire up
-   `bin/stockfish-wrapper.sh` (may not need the libstdc++ workaround at all on a newer
-   distro — try the bare binary first).
-6. Verify at least 2-3 candidate worker models load via `LocalWorker` (either already
-   cached on the new host, or fresh-downloaded — check disk budget first for the latter).
-7. **Run `scripts/phase0_5_blindfold_floor_check.py`** — this was the very next planned
-   action before the migration. It's fully written and should be ready to run as-is
-   (paths are all relative to the project dir via `Path(__file__).resolve()`).
-8. Still pending from the original plan, not yet started: `state.json` +
-   `scripts/orchestrate.py` (phase-resumability driver) and the user-crontab install
-   for autonomous progression independent of any SSH session staying connected.
+1. Check `scripts/status.py` output first — is Phase 0.5 done? If yes, read the gate
+   verdict (`mean_legal_move_rate` per worker in `logs/phase0_5_floor_check/*.json`) before
+   deciding whether Phase 3+ is worth the GPU-hours.
+2. If Phase 0.5 passed the floor: write `src/open_fugu/models/worker_backend.py` (LRU
+   swap manager for mid-tier workers) and `src/open_fugu/models/router_server.py`
+   (FastAPI, OpenAI-compatible `/v1/chat/completions`, random-routing dummy orchestrator
+   first) — this is Phase 1, register `advance_phase_1` in `orchestrate.py` once written.
+3. If migrating hosts again: re-run steps 1-7 from the previous version of this doc
+   (still accurate), `git pull`, and re-run `scripts/install_crontab.sh` on the new host.
 
-## Constraints to keep honoring on the new host
+## Constraints to keep honoring
 
 - One machine at a time (no simultaneous execution across hosts).
 - `chmod 700` every created directory, `600` every created file, `umask 077` before any
   bulk creation.
 - 100GB disk cap via `disk_guard.py`, warn at 80GB, refuse + ask at 100GB.
-- Long GPU jobs go in `tmux -d` sessions; the phase-advancement loop (once built) runs
-  via plain host `cron`, not via any agent-session-dependent scheduling mechanism.
+- Long GPU jobs go in `tmux -d` sessions; phase-advancement runs via plain host `cron`
+  (installed, `*/15 * * * *`), not via any agent-session-dependent scheduling mechanism.
