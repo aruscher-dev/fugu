@@ -1,0 +1,27 @@
+# Vendored upstream repos (own git history / re-clonable, not our code)
+vendor/
+
+# Local binaries (platform/host-specific builds, e.g. Stockfish)
+bin/
+
+# Runtime artifacts -- large, host-specific, or private by nature
+logs/
+checkpoints/
+*.log
+*.jsonl
+*.pt
+*.safetensors
+
+# Secrets / local env
+.env
+
+# Disk-usage baseline manifest (host-specific paths, regenerate per host)
+config/hf_cache_manifest_baseline.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
