@@ -238,7 +238,19 @@ def advance_phase_3(state: dict) -> str:
     progress via the tracked summary rather than a single pass/fail marker,
     and re-launch (idempotently -- the underlying script resumes from
     whatever it already has) if the tmux session isn't currently running but
-    the work also isn't complete yet."""
+    the work also isn't complete yet.
+
+    Unlike every earlier phase, this one does NOT auto-launch off a bare
+    'not done yet' check: Phase 0.5's floor check
+    (reports/phase0_5_summary.json) came back REVIEW_NEEDED (0%/44%/22% mean
+    legal-move rate across these same three default workers), and this phase
+    is exactly the ~10-20 GPU-hour spend that verdict is meant to gate --
+    unlike Phase 2, which only sanity-checked the reward *scorer* and was
+    safe to auto-run regardless. So this additionally requires an explicit
+    human sign-off flag in state.json (phases["3"].gpu_spend_approved ==
+    true) before it will tmux-launch the actual data collection script. A
+    human should review (or improve) Phase 0.5's numbers, then flip that
+    flag to true -- see STATUS.md."""
     summary_path = REPORTS_DIR / "phase3_summary.json"
     session = f"{TMUX_SESSION_PREFIX}3_sft_data"
 
@@ -255,7 +267,14 @@ def advance_phase_3(state: dict) -> str:
               f"session '{session}'" + (f" (progress: {done})" if done else ""))
         return "in_progress"
 
-    # Not running and not complete -- (re)launch. collect_for_worker() skips
+    if not state["phases"].get("3", {}).get("gpu_spend_approved"):
+        print("[orchestrate] phase 3 BLOCKED pending human sign-off: Phase 0.5's floor check came back "
+              "REVIEW_NEEDED (see reports/phase0_5_summary.json) and this phase spends real GPU-hours "
+              "against that same worker pool. Set phases[\"3\"].gpu_spend_approved = true in state.json "
+              "once reviewed (see STATUS.md) to let this launch.")
+        return "blocked"
+
+    # Not running, not complete, and human-approved -- (re)launch. collect_for_worker() skips
     # (position_idx, sample_idx) pairs already written, so a crash-and-cron-
     # relaunch resumes rather than restarting from scratch.
     log_path = LOG_DIR / "phase3_sft_data_collection.log"
