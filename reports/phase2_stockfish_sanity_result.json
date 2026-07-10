@@ -1,7 +1,0 @@
-{
-  "generated_at": "2026-07-10T08:57:34.623231+00:00",
-  "engine_error": "PermissionError: [Errno 13] Permission denied: '/Data/alfred.ruscher/fugu/bin/stockfish-wrapper.sh'",
-  "checks": [],
-  "passed": false,
-  "note": "Sanity-checks StockfishScorer against hand-verified positions (a free-queen best move, a hang-the-queen blunder, an illegal move, a forced-mate move) plus a Ruy Lopez opening replay -- gates whether the reward pipeline is trustworthy enough for Phase 3's SFT data collection to spend real GPU-hours against it."
-}
