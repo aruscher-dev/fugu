@@ -228,11 +228,51 @@ def advance_phase_2(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_3(state: dict) -> str:
+    """Phase 3: SFT data collection (PLAN.md training recipe step 1) -- query
+    every candidate worker n=3-4 times on ~300-600 self-play blindfold
+    positions, score each reply via StockfishScorer, write raw scored
+    records for Phase 4 to build a soft target distribution from. Long
+    background job (PLAN.md estimate: 2-4 days, ~10-20 GPU-hours), so this
+    follows Phase 0.5's pattern (not Phase 1/2's) -- check per-worker
+    progress via the tracked summary rather than a single pass/fail marker,
+    and re-launch (idempotently -- the underlying script resumes from
+    whatever it already has) if the tmux session isn't currently running but
+    the work also isn't complete yet."""
+    summary_path = REPORTS_DIR / "phase3_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}3_sft_data"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+        done = {w: v["collected"] for w, v in summary.get("workers", {}).items()}
+    else:
+        done = None
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 3 SFT data collection still running in tmux "
+              f"session '{session}'" + (f" (progress: {done})" if done else ""))
+        return "in_progress"
+
+    # Not running and not complete -- (re)launch. collect_for_worker() skips
+    # (position_idx, sample_idx) pairs already written, so a crash-and-cron-
+    # relaunch resumes rather than restarting from scratch.
+    log_path = LOG_DIR / "phase3_sft_data_collection.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/phase3_collect_sft_data.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
     "1": advance_phase_1,
     "2": advance_phase_2,
+    "3": advance_phase_3,
 }
 
 
