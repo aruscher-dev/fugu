@@ -1,6 +1,9 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-07, on `lotte.polytechnique.fr`. Phase 0, 0.5, and 1 all complete.
+Last updated: 2026-07-10 (cloud dev routine). Phase 0, 0.5, and 1 complete on
+`lotte.polytechnique.fr`; Phase 2's code has now been written and pushed by
+the cloud dev routine (see "Cloud dev routine additions" below) but not yet
+executed -- that happens next time the GPU host's cron picks it up.
 See `PLAN.md` for the full approved plan this implements.
 
 ## What's actually done
@@ -64,6 +67,41 @@ See `PLAN.md` for the full approved plan this implements.
         test's 2 games both ended in `illegal_move` (expected -- quality isn't gated
         here, Phase 0.5 already covers that) but the **pipeline itself did not crash**.
 
+## Cloud dev routine additions (2026-07-10)
+
+- **Phase 2 (Stockfish reward pipeline sanity check) -- code written, status
+  `pending` in `state.json`, NOT YET RUN.** This was written by the cloud dev
+  routine, which has no GPU/Stockfish/model access in its sandbox and can
+  only write+push code (see "IMPORTANT limitation" below) -- verification was
+  limited to `python3 -m py_compile` and offline structural checks of the
+  hand-written FEN strings (rank-sum/piece-count arithmetic only, no
+  `python-chess` available in that sandbox either). **A human or the next GPU-host
+  cron run should confirm it actually passes** before leaning on it.
+  - `scripts/phase2_stockfish_setup_sanity.py`: runs `StockfishScorer` against
+    a handful of hand-constructed positions with an objectively-known correct
+    answer rather than real game data (safer to verify without an engine to
+    hand): a minimal two-kings-two-queens position where one candidate move
+    captures the opponent's undefended queen (must score as ~best, low
+    centipawn loss) and another hangs the mover's own queen instead (must
+    score as a blunder, loss > `BLUNDER_THRESHOLD_CP`); a not-a-queen-move
+    (must come back `is_legal=False`); the classic Scholar's Mate trap
+    position where the forced mating move must score as zero-loss/best
+    (exercises the `MATE_SCORE_CP` branch, untested by the other checks); and
+    a replay of the same Ruy Lopez opening Phase 0.5 already uses, checking
+    every theory move comes back legal with low mean ACPL. Writes
+    `reports/phase2_stockfish_sanity_result.json` (tracked), idempotent
+    (`--force` to redo).
+  - `advance_phase_2` added to `scripts/orchestrate.py` + registered in
+    `PHASE_ADVANCERS`, following the exact `advance_phase_1` pattern (checks
+    the report marker, launches into a detached `tmux` session if not already
+    running). No GPU/model download needed for this phase -- only the
+    Stockfish binary from Phase 0, so it should run fast once cron reaches it.
+  - **Note for whoever reviews this**: given Phase 0.5's `REVIEW_NEEDED`
+    verdict (weak floor-check numbers, see below), Phase 2 was still safe to
+    implement since it's quality-independent plumbing (verifying the reward
+    *scorer*, not worker chess quality) -- it doesn't spend any of the SFT
+    data collection GPU-hours that the `REVIEW_NEEDED` flag is meant to gate.
+
 ## Bugs fixed this session (worth knowing before extending the harness further)
 
 1. **Chat-template crash on Black games.** `harness.py`'s `play_blindfold_vs_engine`
@@ -103,23 +141,24 @@ code, register its `advance_phase_N` in `orchestrate.py`, and push -- **but it r
 isolated Anthropic cloud sandbox with zero access to this host's GPU/filesystem/tmux
 sessions**, so it can only ever do the *writing*, never the *running*. This host's cron
 picks up what it pushes via `git_pull_if_clean()` and executes it on the real GPU. (This
-routine was discussed but not yet created as of this writing -- ask to set one up via the
-`schedule` skill if wanted; it needs a `run_once`/cron schedule ≥1 hour and a green-lit
-private-repo clone from the chosen cloud environment.)
+routine is now active -- it wrote Phase 2's code, see "Cloud dev routine additions"
+above -- confirmed working as of 2026-07-10.)
 
 ## Exact next steps
 
 1. `scripts/status.py` for a quick check; `state.json` is the source of truth.
-2. **Phase 2** (formal Stockfish sanity-check script -- ad hoc already verified working
-   manually multiple times this session) and **Phase 1.5-ish polish**: consider a
-   prompt-engineering pass on `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push
-   Phase 0.5's legal-move rates up before committing Phase 3's SFT-data-collection
-   GPU-hours -- current numbers (0/44/22%) are a legitimate but weak floor.
-3. **Phase 1 extension**: add the other candidate workers as their own A2A agents
+2. **Phase 2 needs to actually run** on the GPU host (code written, `status: pending` --
+   see "Cloud dev routine additions" above) and its `reports/phase2_stockfish_sanity_result.json`
+   verdict should be checked before trusting the reward pipeline further.
+3. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
+   `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up
+   before committing Phase 3's SFT-data-collection GPU-hours -- current numbers
+   (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`).
+4. **Phase 1 extension**: add the other candidate workers as their own A2A agents
    (currently only `qwen2.5-7b` has been run as a purple agent; `worker_agent.py` takes
    any `CANDIDATE_WORKERS` short id via `--worker`), and update
    `orchestrator_agent.py`'s `--workers` CLI arg / the scenario TOML accordingly.
-4. **Phase 4** is when per-query (not per-game) routing actually matters -- revisit
+5. **Phase 4** is when per-query (not per-game) routing actually matters -- revisit
    `orchestrator_agent.py`'s "Phase 1 scope" code comment before assuming random
    per-game routing is still fine once the real selection head exists.
 

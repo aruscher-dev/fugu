@@ -200,10 +200,39 @@ def advance_phase_1(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_2(state: dict) -> str:
+    """Phase 2: Stockfish reward pipeline sanity check -- hand-verified
+    positions (a free-queen best move, a hang-the-queen blunder, an illegal
+    move, a forced-mate move) plus a Ruy Lopez opening replay, gating whether
+    StockfishScorer is trustworthy before Phase 3 spends real GPU-hours
+    collecting SFT data against it. No GPU/model download needed -- only the
+    Stockfish binary, so this can run as soon as Phase 0's wrapper works."""
+    marker = REPORTS_DIR / "phase2_stockfish_sanity_result.json"
+    session = f"{TMUX_SESSION_PREFIX}2_sanity"
+
+    if marker.exists():
+        summary = json.loads(marker.read_text())
+        if summary.get("passed"):
+            return "done"
+        print(f"[orchestrate] phase 2 sanity check previously failed (engine_error="
+              f"{summary.get('engine_error')}) -- needs a dev session to fix, not a cron retry.")
+        return "blocked"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 2 sanity check still running in tmux session '{session}'")
+        return "in_progress"
+
+    log_path = LOG_DIR / "phase2_stockfish_sanity.log"
+    cmd = f"cd {PROJECT_DIR} && {VENV_PYTHON} scripts/phase2_stockfish_setup_sanity.py >> {log_path} 2>&1"
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
     "1": advance_phase_1,
+    "2": advance_phase_2,
 }
 
 

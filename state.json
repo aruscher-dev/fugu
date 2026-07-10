@@ -13,8 +13,8 @@
       "note": "A2A/AgentBeats wiring: worker purple agent + Fugu orchestrator purple agent (random-routing dummy) + blindfold-chess green judge, all over A2A -- gated on the smoke test's marker file, not on chess quality"
     },
     "2": {
-      "status": "not_started",
-      "note": "Stockfish reward pipeline sanity check (ad-hoc smoke test already passed manually; formal script not yet written)"
+      "status": "pending",
+      "note": "Stockfish reward pipeline sanity check -- scripts/phase2_stockfish_setup_sanity.py written (cloud dev routine, no GPU/Stockfish access to actually run it); advance_phase_2 registered in orchestrate.py; awaiting the GPU host's cron to launch it and produce reports/phase2_stockfish_sanity_result.json"
     },
     "3": {
       "status": "not_started",
