@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-07-10T18:11:45.134433+00:00",
+  "n_positions": 400,
+  "n_samples_per_position": 4,
+  "workers": {
+    "qwen2.5-7b": {
+      "collected": 1600,
+      "expected": 1600,
+      "complete": true
+    },
+    "mistral-7b": {
+      "collected": 1600,
+      "expected": 1600,
+      "complete": true
+    },
+    "deepseek-r1-distill-qwen-7b": {
+      "collected": 1600,
+      "expected": 1600,
+      "complete": true
+    }
+  },
+  "verdict": "COMPLETE",
+  "note": "raw scored (position, worker, sample) records for Phase 4's SFT target construction -- this phase does not itself compute mean reward per worker/position or the softmax-tau soft target distribution."
+}
