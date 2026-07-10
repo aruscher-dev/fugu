@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-07-10T18:47:51.546400+00:00",
+  "n_positions_available": 400,
+  "n_soft_targets": 400,
+  "workers": [
+    "qwen2.5-7b",
+    "mistral-7b",
+    "deepseek-r1-distill-qwen-7b"
+  ],
+  "final_loss": 0.7172538042068481,
+  "mean_loss_last_50": 1.7111554875969888,
+  "checkpoint_path": "/Data/alfred.ruscher/fugu/checkpoints/phase4_sft/backbone_head_svf.pt",
+  "verdict": "COMPLETE",
+  "note": "selection head + SVF-z state dict trained via SFT (cross-entropy vs. a softmax-tau soft target built from Phase 3's per-worker mean reward per position). Does not itself run any blindfold games -- Phase 5 is what actually plays Open-Fugu (this checkpoint's routing) vs. baselines. Phase 0.5's floor check (reports/phase0_5_summary.json) came back REVIEW_NEEDED for this same worker pool -- a human should sanity-check final_loss/mean_loss_last_50 here (does the head learn a non-trivial routing signal at all, or is it fitting near-uniform soft targets because every worker mostly produces illegal moves) before trusting Phase 5's matches to say much."
+}
