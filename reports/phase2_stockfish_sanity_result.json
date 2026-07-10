@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-07-10T08:59:06.916798+00:00",
+  "engine_error": null,
+  "checks": [
+    {
+      "name": "queen_hang_best_move",
+      "move": "d2d5",
+      "passed": true,
+      "is_legal": true,
+      "centipawn_loss": 28
+    },
+    {
+      "name": "queen_hang_blunder_move",
+      "move": "d2d4",
+      "passed": true,
+      "is_legal": true,
+      "is_blunder": true,
+      "centipawn_loss": 1034
+    },
+    {
+      "name": "queen_hang_illegal_move",
+      "move": "d2f3",
+      "passed": true,
+      "is_legal": false
+    },
+    {
+      "name": "scholars_mate_forced_move",
+      "move": "h5f7",
+      "passed": true,
+      "is_legal": true,
+      "centipawn_loss": 0,
+      "played_cp": 10000,
+      "best_cp": 9999
+    },
+    {
+      "name": "ruy_lopez_opening_replay",
+      "moves": [
+        "e2e4",
+        "e7e5",
+        "g1f3",
+        "b8c6",
+        "f1b5",
+        "a7a6"
+      ],
+      "passed": true,
+      "all_legal": true,
+      "mean_acpl": 2.3333333333333335
+    }
+  ],
+  "passed": true,
+  "note": "Sanity-checks StockfishScorer against hand-verified positions (a free-queen best move, a hang-the-queen blunder, an illegal move, a forced-mate move) plus a Ruy Lopez opening replay -- gates whether the reward pipeline is trustworthy enough for Phase 3's SFT data collection to spend real GPU-hours against it."
+}
