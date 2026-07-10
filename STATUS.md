@@ -1,19 +1,16 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-10 (cloud dev routine -- wrote the minichess track's `m2` floor
-check, see "5x5 (Gardner Minichess)..." below; main `phase_order` track unchanged this
-run, still blocked on Phase 3's in-flight GPU job). Phase 0, 0.5, 1, and 2 all complete on
-`lotte.polytechnique.fr` -- Phase 2's `reports/phase2_stockfish_sanity_result.json`
-shows `passed: true` (after a same-day fix for a `chmod 600` sweep that had stripped
-`+x` from `bin/stockfish-wrapper.sh`/the Stockfish binary, and a loosened
-near-zero-noise threshold on one check -- see the host's own commit history for
-details, not reproduced here). Phase 3's code has been written and is now **running**
-(tmux session `openfugu-phase3_sft_data` on `lotte.polytechnique.fr`, started
-2026-07-10T09:11 UTC): `advance_phase_3` requires an explicit human sign-off flag
-(`state.json`'s `phases["3"].gpu_spend_approved`, currently `true`) before it will
-tmux-launch/relaunch the data collection run -- see "Phase 3 needs a human decision
-before it can run" below for why this gate exists and why it's already satisfied for
-this run.
+Last updated: 2026-07-10 (cloud dev routine -- wrote Phase 4, see "Cloud dev routine
+additions" below; `minichess_phase_order` track unchanged this run). Phase 0, 0.5, 1, 2,
+and now **3 are all complete** on `lotte.polytechnique.fr` -- Phase 3's
+`reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records: 400
+positions x 4 samples x 3 workers, all three of `qwen2.5-7b`/`mistral-7b`/
+`deepseek-r1-distill-qwen-7b` fully collected). **Phase 4 (SVF + selection head + SFT
+training) has been written this session and is now `pending`**, awaiting the GPU host's
+cron to actually run it -- no additional human sign-off gate on top (see "Cloud dev
+routine additions" below for why), but see that section's closing note on why a human
+should still sanity-check the resulting checkpoint before Phase 5 spends GPU-hours on
+real matches with it.
 See `PLAN.md` for the full approved plan this implements.
 
 ## What's actually done
@@ -93,30 +90,103 @@ See `PLAN.md` for the full approved plan this implements.
       pattern. Gates whether `StockfishScorer` is trustworthy before Phase 3 spends
       GPU-hours on data scored by it -- it is.
 
-## Phase 3 needs a human decision before it can run
+## Phase 3 (SFT data collection) -- DONE, `reports/phase3_summary.json` (`verdict: COMPLETE`)
 
-Phase 0.5's floor check (`reports/phase0_5_summary.json`) came back **`REVIEW_NEEDED`**:
-mean legal-move rate 0% (`qwen2.5-7b`), 44% (`mistral-7b`), 22%
-(`deepseek-r1-distill-qwen-7b`). Phase 3 is exactly the ~10-20 GPU-hour spend (PLAN.md's
-training-recipe cost estimate) that this gate exists to protect -- unlike Phase 2, which
-only sanity-checked the reward *scorer* and was safe to auto-run regardless of worker
-quality.
-
-An earlier pass at this phase's code (see "Cloud dev routine additions" below) registered
-`advance_phase_3` the same way as every prior phase -- i.e. it auto-launched on the very
-next cron tick, since the host's cron runs every 15 minutes unattended and nothing was
-checking the `REVIEW_NEEDED` verdict at all: the tmux session was already running by the
-time a later session added the gate. `advance_phase_3` now checks `state.json`'s
-`phases["3"].gpu_spend_approved` flag before tmux-launching/relaunching -- currently
-`true`, set there (not left blocking the already-running job) because the host's own
-commit history shows a human (`alfred.ruscher@gmail.com`, "Fix Phase 3 position
-generation: filter out already-terminal positions") was already actively engaged with
-this exact run, i.e. the sign-off this flag exists to capture already happened in
-substance. Going forward, this flag's real value is protecting any *future*
-crash-and-cron-relaunch of this multi-day job from resuming silently without a similar
-check-in -- flip it back to `false` in `state.json` if that's not the intent.
+Ran to completion on `lotte.polytechnique.fr`: 4,800/4,800 records (400 self-play
+blindfold positions x 4 samples x 3 workers, all of `qwen2.5-7b`/`mistral-7b`/
+`deepseek-r1-distill-qwen-7b` fully collected). Kept for the historical record: Phase
+0.5's floor check (`reports/phase0_5_summary.json`) came back **`REVIEW_NEEDED`** (mean
+legal-move rate 0%/44%/22% across those same three workers), which is exactly the
+~10-20 GPU-hour spend `advance_phase_3`'s `gpu_spend_approved` gate exists to protect
+against auto-launching unattended. That flag was set `true` because the host's own
+commit history showed a human (`alfred.ruscher@gmail.com`, "Fix Phase 3 position
+generation: filter out already-terminal positions") already actively engaged with this
+exact run before the gate existed -- i.e. the sign-off it's meant to capture had already
+happened in substance. The flag stays `true` in `state.json`; its ongoing value is
+protecting any *future* crash-and-cron-relaunch of a similarly GPU-heavy phase from
+resuming unattended without an equivalent check-in.
 
 ## Cloud dev routine additions (2026-07-10)
+
+- **Phase 4 (SVF + selection head implementation, SFT training) -- code written, status
+  `pending` in `state.json`, no extra approval gate.** Per PLAN.md's training recipe step
+  1's second half: turn Phase 3's raw per-(worker, position, sample) records into a soft
+  target distribution over the worker swarm (mean reward -> softmax-τ) per position, then
+  train the orchestrator backbone's selection head + SVF `z` vectors against it via a
+  plain AdamW loop minimizing cross-entropy vs. that soft target (equivalent to KL
+  divergence up to the target's own entropy, a constant w.r.t. the trained parameters).
+  Written by the cloud dev routine (no GPU/model access there) -- verification limited to
+  `python3 -m py_compile` on every new file plus pure-logic checks (no torch installed in
+  the sandbox, none needed for this half) of `build_soft_targets()`/
+  `mean_reward_per_position()`/`softmax()` against hand-constructed records: verified the
+  intersect-only-positions-every-worker-covers behavior, that a worker with a large
+  reward-gap advantage dominates its soft target (`probs[0] > 0.99`), that `probs` always
+  sums to 1, and that smaller `tau` sharpens (larger flattens) the resulting distribution
+  as expected. **The next GPU-host cron run should confirm the SVD/backbone/
+  training-loop half actually works end-to-end** (no way to exercise `torch.linalg.svd`,
+  a real backbone forward pass, or `loss.backward()` without a GPU + the downloaded
+  orchestrator backbone model) before trusting the resulting checkpoint.
+  - `src/open_fugu/models/svf.py` -- hand-rolled SVF (peft 0.19.1 has no adapter for
+    this, same reasoning PLAN.md already gives): `SVFLinear` wraps one `nn.Linear`,
+    computing `U, S, Vh = torch.linalg.svd(weight)` once at construction, freezing
+    `U`/`S`/`Vh` as buffers, and exposing only a `z` parameter (init all-ones, so the
+    swap is a no-op until trained) that rescales `S` on every forward
+    (`effective_weight() = U @ diag(S * z) @ Vh`). `apply_svf()` walks
+    `model.model.layers[-n:]` (Qwen2/Llama-style decoder stack -- matches this project's
+    orchestrator-backbone candidates) and replaces each `self_attn.o_proj`/`mlp.down_proj`
+    with an `SVFLinear`, per PLAN.md's "targeting only o_proj/down_proj of the last 2-3
+    orchestrator backbone layers."
+  - `src/open_fugu/models/worker_backend.py` -- `OrchestratorBackbone`: loads the small
+    backbone model (default `Qwen2.5-1.5B-Instruct`, per PLAN.md), freezes every
+    parameter, applies `apply_svf()` to the last few layers, and adds a
+    `selection_head = nn.Linear(hidden_size, L)` on top of the last-token hidden state
+    (`L` = number of candidate workers, fixed output order = `config.worker_ids`).
+    `trainable_parameters()` yields exactly the SVF `z` vectors + the selection head's own
+    parameters -- everything else in the backbone stays frozen throughout. **Not yet
+    wired into `a2a/orchestrator_agent.py`'s actual dispatch logic** -- that orchestrator
+    still does Phase 1's random-per-game routing; per the existing code comment there,
+    real per-query routing also needs a stateless full-transcript-forwarding redesign
+    (since worker agents keep conversation state server-side keyed by A2A `context_id`),
+    which is deferred to whichever of Phase 4/5 actually plays matches with this
+    checkpoint -- this phase's own scope (per `state.json`'s original note and PLAN.md's
+    phase table) is "SVF/head implementation + SFT training," not wiring it into live
+    A2A dispatch.
+  - `src/open_fugu/train/train_sft.py` -- deliberately split into a pure half
+    (`build_soft_targets()`/`mean_reward_per_position()`/`softmax()`/`load_positions()`
+    /`load_jsonl()`, no torch import at module level, tested in the sandbox as described
+    above) and a GPU half (`train(targets, backbone, epochs, lr)`, imports `torch` and
+    `harness.format_opening_prompt` inside the function body so the module stays
+    importable without torch installed). `build_soft_targets()` only emits a target for
+    positions where **every** requested worker has at least one scored sample -- a
+    position partially covered by the swarm (e.g. one worker's Phase 3 run got killed
+    mid-position) is dropped rather than guessed at, so every training example is a
+    genuine head-to-head comparison. Reward = `-centipawn_loss` (an illegal/unparseable
+    move already carries `StockfishScorer.MATE_SCORE_CP` there per
+    `collect_sft_data.py`'s convention, so it naturally gets the worst reward with no
+    special-casing), divided by a `reward_scale_cp` constant (default 100, i.e. pawns) so
+    `tau` stays in a human-friendly range independent of Stockfish's raw centipawn scale.
+  - `scripts/phase4_train_sft.py` -- thin CLI: loads Phase 3's
+    `logs/phase3_sft_data/{positions.jsonl,<worker>.jsonl}`, builds soft targets, trains
+    (skips training entirely and writes a `NO_DATA` verdict if zero positions have
+    full worker coverage -- e.g. wrong `--workers` list), and saves the trained
+    `selection_head` state dict + each `SVFLinear`'s `z` tensor to
+    `checkpoints/phase4_sft/backbone_head_svf.pt` (gitignored, host-specific). Writes the
+    tracked `reports/phase4_summary.json` (`n_soft_targets`, `final_loss`,
+    `mean_loss_last_50`, `verdict`).
+  - `advance_phase_4` added to `scripts/orchestrate.py` + registered in
+    `PHASE_ADVANCERS`, following `advance_phase_2`'s single-pass/fail-marker pattern (not
+    Phase 0.5/3's multi-day-resumable pattern -- PLAN.md estimates this phase at 0.5-1
+    day, small parameter count, Phase 3 already paid the expensive part). **Deliberately
+    no `gpu_spend_approved`-style gate**: unlike Phase 3, this only reads Phase 3's
+    already-collected (and already human-approved) data and trains a small number of
+    parameters, not a fresh multi-GPU-hour spend against the borderline worker-quality
+    numbers that gate protects against. That said -- **Phase 0.5's floor check is still
+    `REVIEW_NEEDED`** for this exact worker pool, so `reports/phase4_summary.json`'s own
+    `note` field flags that a human should look at `final_loss`/`mean_loss_last_50` once
+    this actually runs: with workers this weak at producing legal moves, it's plausible
+    the per-position soft targets end up close to uniform (little real signal for the
+    head to learn) rather than genuinely discriminating between workers. Worth a look
+    before Phase 5 spends GPU-hours on real matches using this checkpoint's routing.
 
 - **Phase 3 (SFT data collection) -- code written, status `pending` +
   `gpu_spend_approved: false` in `state.json`, NOT AUTO-LAUNCHABLE (see "Phase 3 needs a
@@ -164,7 +234,8 @@ check-in -- flip it back to `false` in `state.json` if that's not the intent.
     `PHASE_ADVANCERS`, following `advance_phase_0_5`'s pattern (not Phase 1/2's) since
     this is a long multi-day background job spanning many cron cycles, not a single
     pass/fail smoke test -- **plus a `gpu_spend_approved` sign-off gate on top, see
-    "Phase 3 needs a human decision before it can run" above.**
+    "Phase 3 (SFT data collection) -- DONE" above.** (This bullet describes the state as
+    originally written; Phase 3 has since completed -- see that section.)
 
 ## Bugs fixed this session (worth knowing before extending the harness further)
 
@@ -294,33 +365,37 @@ to re-verify anywhere, but `m2` onward needs real worker inference.
 ## Exact next steps
 
 1. `scripts/status.py` for a quick check; `state.json` is the source of truth.
-2. **Phase 3 is running with `gpu_spend_approved: true`** (tmux session
-   `openfugu-phase3_sft_data` on `lotte.polytechnique.fr`, started
-   2026-07-10T09:11 UTC) -- see "Phase 3 needs a human decision before it can run"
-   above for why that flag exists (Phase 0.5's `REVIEW_NEEDED` verdict) and why it's
-   already `true` for this run specifically (a human was already actively engaged with
-   it, per the host's own commit history). Let cron babysit it across cycles (~10-20
-   GPU-hours, expect many cron ticks); the flag now mainly protects a *future*
-   crash-and-relaunch from resuming unattended without a similar check-in.
+2. **Phase 4 (SVF + selection head + SFT training) -- DONE writing, `pending`
+   execution.** Code written this session (see "Cloud dev routine additions" above);
+   `advance_phase_4` will launch `scripts/phase4_train_sft.py` on the GPU host's next
+   cron tick, no extra approval gate. Once `reports/phase4_summary.json` lands, a
+   human/dev session should read `final_loss`/`mean_loss_last_50` there before Phase 5
+   spends GPU-hours on real matches using the resulting checkpoint -- Phase 0.5's floor
+   check is still `REVIEW_NEEDED` for this worker pool, so it's worth confirming the
+   head actually learned a non-trivial routing signal rather than fitting near-uniform
+   soft targets.
 3. **Minichess track (`m2`) -- DONE writing, `pending` execution.** Floor-check script +
-   opening book written this session (see "5x5 (Gardner Minichess)..." section above);
-   `advance_m2` will launch it on the GPU host's next cron tick. Once
+   opening book written earlier this session (see "5x5 (Gardner Minichess)..." section
+   above); `advance_m2` will launch it on the GPU host's next cron tick. Once
    `reports/m2_gardner_floor_check_summary.json` lands, a human/dev session should read
    its verdict before m3 (A2A wiring) is built against this worker pool, same spirit as
    Phase 0.5's gate.
 4. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
    `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up --
    current numbers (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`); this
-   would also directly improve Phase 3's SFT data quality if done first.
+   would also directly improve the quality of both Phase 3's already-collected SFT data
+   and Phase 4's resulting checkpoint if done and re-run first.
 5. **Phase 1 extension**: add the other candidate workers as their own A2A agents
    (currently only `qwen2.5-7b` has been run as a purple agent; `worker_agent.py` takes
    any `CANDIDATE_WORKERS` short id via `--worker`), and update
    `orchestrator_agent.py`'s `--workers` CLI arg / the scenario TOML accordingly.
-6. **Phase 4** is when per-query (not per-game) routing actually matters -- revisit
-   `orchestrator_agent.py`'s "Phase 1 scope" code comment before assuming random
-   per-game routing is still fine once the real selection head exists. Phase 4 is also
-   where Phase 3's raw per-sample records turn into r̄-per-worker/position and a
-   softmax-τ soft target distribution for SFT training.
+6. **Wiring Phase 4's trained selection head into live A2A dispatch** is still open --
+   `a2a/orchestrator_agent.py` still does Phase 1's random-per-game routing;
+   `models/worker_backend.py`'s `OrchestratorBackbone` exists now but isn't called from
+   there yet. Per the existing code comment in `orchestrator_agent.py`, real per-query
+   routing also needs a stateless full-transcript-forwarding redesign (worker agents
+   keep conversation state server-side keyed by A2A `context_id`) -- likely Phase 5's
+   job, since that's when Open-Fugu actually plays matches with this checkpoint.
 
 ## Constraints to keep honoring
 

@@ -286,12 +286,69 @@ def advance_phase_3(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_4(state: dict) -> str:
+    """Phase 4: SVF + selection head implementation, SFT training (PLAN.md
+    training recipe step 1's second half). Phase 3 already collected and
+    scored the raw per-(worker, position, sample) records; this phase turns
+    them into a per-position soft target distribution (softmax-tau over mean
+    reward) and trains the orchestrator backbone's selection head + SVF `z`
+    vectors (src/open_fugu/models/{svf,worker_backend}.py,
+    src/open_fugu/train/train_sft.py) against it via a plain AdamW loop.
+
+    Short relative to Phase 3 (PLAN.md estimate: 0.5-1 day -- head+SVF-z is a
+    tiny parameter count and Phase 3 already paid the expensive part), but
+    still launched via tmux/cron like every GPU phase rather than run
+    synchronously, since it needs the GPU and downloads the orchestrator
+    backbone model (Qwen2.5-1.5B-Instruct) on first use.
+
+    Unlike Phase 3, this does NOT require an extra gpu_spend_approved-style
+    human sign-off gate: it only reads Phase 3's already-collected (and
+    already human-approved) data and trains a small number of parameters --
+    not a new multi-GPU-hour spend against the borderline worker-quality
+    numbers that gate exists to protect. See STATUS.md and this phase's own
+    `reports/phase4_summary.json` note for why a human should still
+    sanity-check the resulting loss/checkpoint before Phase 5 spends
+    GPU-hours on real matches using it."""
+    summary_path = REPORTS_DIR / "phase4_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}4_sft_train"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+        print(f"[orchestrate] phase 4 previous run verdict was '{summary.get('verdict')}' "
+              f"(not COMPLETE) -- needs a dev session to look at, not a cron retry.")
+        return "blocked"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 4 SFT training still running in tmux session '{session}'")
+        return "in_progress"
+
+    if not (PROJECT_DIR / "logs" / "phase3_sft_data" / "positions.jsonl").exists():
+        print("[orchestrate] phase 4 waiting on Phase 3's output "
+              "(logs/phase3_sft_data/positions.jsonl not found yet)")
+        return "blocked"
+
+    # Not running and not complete -- (re)launch. build_soft_targets()/
+    # collect_for_worker()'s underlying data is static once Phase 3 finished,
+    # so re-running from scratch on a crash-and-cron-relaunch is cheap here
+    # (unlike Phase 3's multi-day resumable job).
+    log_path = LOG_DIR / "phase4_sft_train.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/phase4_train_sft.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
     "1": advance_phase_1,
     "2": advance_phase_2,
     "3": advance_phase_3,
+    "4": advance_phase_4,
 }
 
 
