@@ -48,7 +48,13 @@ class SampledPosition:
         return "white" if len(self.opening_uci_moves) % 2 == 0 else "black"
 
 
-def _play_one_self_play_game(engine: StockfishScorer, target_ply: int, rng: random.Random) -> List[str]:
+def _play_one_self_play_game(engine: StockfishScorer, target_ply: int, rng: random.Random) -> tuple[List[str], bool]:
+    """Returns (moves, is_terminal) -- is_terminal is True when the position
+    reached after `moves` has no legal moves left (checkmate/stalemate). The
+    loop only checks is_game_over() *before* generating each move, so a
+    mating move played on the final iteration still gets appended -- callers
+    must check is_terminal themselves rather than assume every returned
+    position has a next move to query a worker about."""
     board = chess.Board()
     moves: List[str] = []
     for _ in range(target_ply):
@@ -60,7 +66,7 @@ def _play_one_self_play_game(engine: StockfishScorer, target_ply: int, rng: rand
             mv = engine.best_move(board)
         board.push_uci(mv)
         moves.append(mv)
-    return moves
+    return moves, board.is_game_over()
 
 
 def generate_positions(n_positions: int, seed: int = 42, depth: int = 10) -> List[SampledPosition]:
@@ -80,9 +86,14 @@ def generate_positions(n_positions: int, seed: int = 42, depth: int = 10) -> Lis
             skill = rng.choice(SKILL_LEVELS)
             engine.engine.configure({"Skill Level": skill})
             target_ply = rng.randint(MIN_PLY, MAX_PLY)
-            moves = _play_one_self_play_game(engine, target_ply, rng)
-            if len(moves) < MIN_PLY:
-                continue  # game ended too early (fast mate/stalemate at low skill) -- not usable
+            moves, is_terminal = _play_one_self_play_game(engine, target_ply, rng)
+            if len(moves) < MIN_PLY or is_terminal:
+                # Either ended too early (fast mate/stalemate at low skill), or
+                # the LAST move played was itself the mating/stalemating move --
+                # a position with zero legal moves left has nothing for a
+                # blindfold worker to answer; every worker would trivially score
+                # "illegal" on it regardless of quality, adding pure label noise.
+                continue
             positions.append(SampledPosition(position_idx=idx, opening_uci_moves=moves))
             idx += 1
     return positions
