@@ -1,6 +1,8 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-10 (cloud dev routine). Phase 0, 0.5, 1, and 2 all complete on
+Last updated: 2026-07-10 (cloud dev routine -- wrote the minichess track's `m2` floor
+check, see "5x5 (Gardner Minichess)..." below; main `phase_order` track unchanged this
+run, still blocked on Phase 3's in-flight GPU job). Phase 0, 0.5, 1, and 2 all complete on
 `lotte.polytechnique.fr` -- Phase 2's `reports/phase2_stockfish_sanity_result.json`
 shows `passed: true` (after a same-day fix for a `chmod 600` sweep that had stripped
 `+x` from `bin/stockfish-wrapper.sh`/the Stockfish binary, and a loosened
@@ -231,9 +233,42 @@ exact engine-stack gotchas (pyffish/uv install trap, Fairy-Stockfish stdin-EOF t
   objectively known correct answer, same style as Phase 2's sanity check --
   `reports/m1_gardner_engine_verify_result.json`, `passed: true`) plus a manual
   end-to-end `harness.play_blindfold_vs_engine()` smoke test.
-- **m2 onward: not started** -- needs a dev session to write m2's floor-check script
-  (including a small hand-verified Gardner opening book, none exists yet) before cron
-  can run it, same "no script yet" gating as the main track.
+- **m2 (code written by the cloud dev routine, status `pending` -- awaiting GPU host).**
+  `scripts/m2_gardner_floor_check.py`: Phase 0.5's floor check re-run on 5x5, same
+  default 3-worker pool, over `harness.play_blindfold_vs_engine(board_factory=
+  GardnerBoard, ...)` + `GardnerScorer`. Needed a small opening book that didn't exist
+  yet -- `GARDNER_OPENING_BOOK` (4 lines, 4 plies each: `pawn_knight_skirmish_c`,
+  `knight_pawn_flank_b`, `pawn_queen_skirmish_d`, `pawn_bishop_skirmish_e`), one game per
+  line, alternating LLM color. Per PLAN.md's explicit "don't guess moves" instruction:
+  every line was checked ply-by-ply against `pyffish.legal_moves()` before being
+  hardcoded, using a throwaway `pip install pyffish` venv in the cloud sandbox (CPU-only
+  move generation, no GPU needed, so this was actually runnable there unlike the rest of
+  this phase) -- same verification method M1 used, not a guess. Also ran a pure-logic
+  integration check driving the real `harness.play_blindfold_vs_engine` through all 4
+  book lines with fake (non-GPU) move functions: confirmed the illegal-move-termination
+  path triggers correctly for all 4 lines x both colors, and a both-sides-random-legal
+  variant plays multiple plies to checkmate/max-plies with zero crashes and zero
+  false-illegal calls -- see the cloud dev routine's session for the exact script (not
+  committed, sandbox-only scratch verification).
+  - Opponent weakening: unlike Phase 0.5 (vanilla Stockfish's `Skill Level` UCI option,
+    `skill_level=1`), `GardnerScorer`/Fairy-Stockfish has no *confirmed* `Skill Level`
+    option on this binary (not verifiable without GPU-host access to the binary itself),
+    so `m2_gardner_floor_check.py` weakens the opponent via a shallower search
+    (`ENGINE_FLOOR_DEPTH = 8`, vs. `engine.py`'s default `depth=14`) instead --
+    deliberately did **not** touch `engine.py` itself to add an unverified UCI option,
+    since m1's engine code is already verified-passing and this didn't need changing it.
+  - `advance_m2` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`, following
+    `advance_phase_0_5`'s pattern (per-worker tracked reports + a `write_m2_summary()`
+    aggregate, not `advance_m1`'s single pass/fail marker) since this reports per-worker
+    legal-move-rate numbers the same way Phase 0.5 does. Dry-run verified (mocked
+    `tmux_session_exists`/`tmux_launch`, real `advance_track()` logic) to correctly reach
+    and launch m2 once m0/m1 are done. Writes `reports/m2_gardner_floor_check_summary.json`
+    (tracked) once all 3 workers finish -- same `PASS`/`REVIEW_NEEDED` heuristic as
+    `reports/phase0_5_summary.json`.
+  - **Needs the GPU host to actually run** (real worker inference + `bin/fairy-stockfish`,
+    neither available in the cloud sandbox) -- next cron tick on `lotte.polytechnique.fr`
+    picks it up automatically now that `advance_m2` exists and `state.json`'s `m2` is
+    `pending`.
 
 **IMPORTANT if resuming on a different host than `lotte.polytechnique.fr`**: `bin/`
 (including `bin/fairy-stockfish`) is gitignored and host-specific, same as the
@@ -267,9 +302,12 @@ to re-verify anywhere, but `m2` onward needs real worker inference.
    it, per the host's own commit history). Let cron babysit it across cycles (~10-20
    GPU-hours, expect many cron ticks); the flag now mainly protects a *future*
    crash-and-relaunch from resuming unattended without a similar check-in.
-3. **Minichess track (`m2`)**: write the 5x5 floor-check script (small hand-verified
-   opening book + reuse `harness.py`'s `board_factory=GardnerBoard`) -- see the section
-   above and PLAN.md's addendum for the full spec.
+3. **Minichess track (`m2`) -- DONE writing, `pending` execution.** Floor-check script +
+   opening book written this session (see "5x5 (Gardner Minichess)..." section above);
+   `advance_m2` will launch it on the GPU host's next cron tick. Once
+   `reports/m2_gardner_floor_check_summary.json` lands, a human/dev session should read
+   its verdict before m3 (A2A wiring) is built against this worker pool, same spirit as
+   Phase 0.5's gate.
 4. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
    `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up --
    current numbers (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`); this

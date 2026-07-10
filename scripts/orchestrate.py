@@ -339,9 +339,72 @@ def advance_m1(state: dict) -> str:
     return "in_progress"
 
 
+def advance_m2(state: dict) -> str:
+    """m2: floor check on 5x5 with the existing worker pool (same three
+    default workers Phase 0.5 tested), using harness.py's
+    board_factory=GardnerBoard + GardnerScorer and a small hand-verified
+    opening book (see scripts/m2_gardner_floor_check.py). Follows
+    advance_phase_0_5's pattern (per-worker tracked reports + a compact
+    aggregate summary), not advance_m1's single-marker pattern, since this
+    reports per-worker legal-move-rate numbers the same way Phase 0.5 does."""
+    results_dir = PROJECT_DIR / "logs" / "m2_gardner_floor_check"
+    default_workers = ["qwen2.5-7b", "mistral-7b", "deepseek-r1-distill-qwen-7b"]
+    session = f"{TMUX_SESSION_PREFIX}_m2_floor_check"
+
+    reports_done = [w for w in default_workers if (results_dir / f"{w}.json").exists()]
+    if len(reports_done) == len(default_workers):
+        write_m2_summary(default_workers, results_dir)
+        return "done"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] m2 floor check still running in tmux session '{session}' "
+              f"({len(reports_done)}/{len(default_workers)} workers done)")
+        return "in_progress"
+
+    # Not running and not done -- (re)launch. The underlying script is
+    # idempotent (skips workers with an existing report unless --force), so a
+    # crash-and-cron-relaunch just picks up remaining workers.
+    log_path = LOG_DIR / "m2_gardner_floor_check.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/m2_gardner_floor_check.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
+def write_m2_summary(workers: list, results_dir: Path) -> None:
+    """Compact, tracked (non-gitignored) gate-verdict summary -- mirrors
+    write_phase0_5_summary, so the cloud dev routine (no access to this
+    host's logs/) can decide whether m3's A2A wiring / m4's SFT data
+    collection are worth building against this same worker pool on 5x5."""
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.chmod(0o700)
+    per_worker = {}
+    for w in workers:
+        r = json.loads((results_dir / f"{w}.json").read_text())
+        per_worker[w] = r["summary"]
+    verdict = "PASS" if all(
+        (s.get("mean_legal_move_rate") or 0) > 0.5
+        for s in per_worker.values()
+    ) else "REVIEW_NEEDED"
+    summary = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "workers": per_worker,
+        "verdict": verdict,
+        "note": ("verdict is a rough heuristic (mean_legal_move_rate > 0.5) -- "
+                 "read per-worker numbers before deciding to build m3+ on this worker pool"),
+    }
+    out_path = REPORTS_DIR / "m2_gardner_floor_check_summary.json"
+    out_path.write_text(json.dumps(summary, indent=2))
+    out_path.chmod(0o600)
+    print(f"[orchestrate] wrote {out_path} (verdict={verdict})")
+
+
 MINICHESS_PHASE_ADVANCERS = {
     "m0": advance_m0,
     "m1": advance_m1,
+    "m2": advance_m2,
 }
 
 
