@@ -6,8 +6,10 @@ shows `passed: true` (after a same-day fix for a `chmod 600` sweep that had stri
 `+x` from `bin/stockfish-wrapper.sh`/the Stockfish binary, and a loosened
 near-zero-noise threshold on one check -- see the host's own commit history for
 details, not reproduced here). Phase 3's code has now been written and pushed by the
-cloud dev routine (see "Cloud dev routine additions" below) but not yet executed --
-that happens next time the GPU host's cron picks it up.
+cloud dev routine, but **it will not auto-launch**: `advance_phase_3` now requires an
+explicit human sign-off flag (`state.json`'s `phases["3"].gpu_spend_approved`,
+currently `false`) before it will tmux-launch the actual data collection run -- see
+"Phase 3 needs a human decision before it can run" below, this is important.
 See `PLAN.md` for the full approved plan this implements.
 
 ## What's actually done
@@ -87,10 +89,40 @@ See `PLAN.md` for the full approved plan this implements.
       pattern. Gates whether `StockfishScorer` is trustworthy before Phase 3 spends
       GPU-hours on data scored by it -- it is.
 
+## Phase 3 needs a human decision before it can run
+
+Phase 0.5's floor check (`reports/phase0_5_summary.json`) came back **`REVIEW_NEEDED`**:
+mean legal-move rate 0% (`qwen2.5-7b`), 44% (`mistral-7b`), 22%
+(`deepseek-r1-distill-qwen-7b`). Phase 3 is exactly the ~10-20 GPU-hour spend (PLAN.md's
+training-recipe cost estimate) that this gate exists to protect -- unlike Phase 2, which
+only sanity-checked the reward *scorer* and was safe to auto-run regardless of worker
+quality.
+
+An earlier pass at this phase's code (see "Cloud dev routine additions" below) registered
+`advance_phase_3` the same way as every prior phase -- i.e. it would have auto-launched
+on the very next cron tick, since the host's cron runs every 15 minutes unattended and
+nothing was checking the `REVIEW_NEEDED` verdict at all. That's been tightened:
+`advance_phase_3` now checks `state.json`'s `phases["3"].gpu_spend_approved` flag
+(currently `false`) and returns `"blocked"` with a clear printed message instead of
+tmux-launching if it isn't `true`. This is a code-level gate, not just a note in this
+doc -- important given cron runs unattended and would otherwise burn real GPU-hours
+collecting SFT data dominated by illegal-move noise for at least `qwen2.5-7b`.
+
+**To unblock Phase 3**, a human should:
+1. Decide whether 0%/44%/22% is an acceptable starting point (the paper's own "Key open
+   risk #3" suggests some weakness here is expected for 7B models playing genuinely
+   blindfold), or do the prompt-engineering pass in "Exact next steps" below first and
+   re-run Phase 0.5 (`--force`) to see if the numbers improve.
+2. Once satisfied, edit `state.json` and set `phases["3"].gpu_spend_approved` to `true`
+   (leave `status` as `"pending"` -- `orchestrate.py` doesn't gate on `status`, only on
+   this flag). The next cron tick will then tmux-launch
+   `scripts/phase3_collect_sft_data.py` normally.
+
 ## Cloud dev routine additions (2026-07-10)
 
-- **Phase 3 (SFT data collection) -- code written, status `pending` in `state.json`, NOT
-  YET RUN.** Per PLAN.md's training recipe step 1: sample ~300-600 blindfold-chess
+- **Phase 3 (SFT data collection) -- code written, status `pending` +
+  `gpu_spend_approved: false` in `state.json`, NOT AUTO-LAUNCHABLE (see "Phase 3 needs a
+  human decision" above).** Per PLAN.md's training recipe step 1: sample ~300-600 blindfold-chess
   positions, query every candidate worker n=3-4 times each, score via `StockfishScorer`,
   and write raw records for Phase 4 to build a soft target distribution from. Written by
   the cloud dev routine (no GPU/Stockfish/model access there) -- verification limited to
@@ -133,14 +165,8 @@ See `PLAN.md` for the full approved plan this implements.
   - `advance_phase_3` added to `scripts/orchestrate.py` + registered in
     `PHASE_ADVANCERS`, following `advance_phase_0_5`'s pattern (not Phase 1/2's) since
     this is a long multi-day background job spanning many cron cycles, not a single
-    pass/fail smoke test.
-  - **Note for whoever reviews this**: Phase 0.5's `REVIEW_NEEDED` verdict (weak
-    legal-move-rate floor, see below) is about worker chess *quality*, which this phase
-    doesn't touch (it's plumbing -- position generation + scoring infrastructure), but it
-    directly precedes the thing that flag is actually meant to gate: real GPU-hours spent
-    generating SFT data. **A human should look at Phase 0.5's numbers again (or at least
-    a first small batch of this phase's collected data) before letting the full
-    400x4x3 run complete unattended.**
+    pass/fail smoke test -- **plus a `gpu_spend_approved` sign-off gate on top, see
+    "Phase 3 needs a human decision before it can run" above.**
 
 ## Bugs fixed this session (worth knowing before extending the harness further)
 
@@ -188,11 +214,11 @@ including same-day fix-forward on Phase 2's first failed run.)
 ## Exact next steps
 
 1. `scripts/status.py` for a quick check; `state.json` is the source of truth.
-2. **Phase 3 needs to actually run** on the GPU host (code written, `status: pending` --
-   see "Cloud dev routine additions" above). This is the long one (2-4 days background,
-   ~10-20 GPU-hours) -- expect it to span many cron cycles. Per the note above, a human
-   should sanity-check Phase 0.5's `REVIEW_NEEDED` numbers (or an early slice of Phase
-   3's own output) before letting the full run complete unattended.
+2. **A human needs to decide on Phase 3** -- see "Phase 3 needs a human decision before it
+   can run" above. Either set `phases["3"].gpu_spend_approved = true` in `state.json` to
+   approve as-is, or do the prompt-engineering pass in (3) below first and re-run Phase
+   0.5 to see if the floor-check numbers improve before spending the ~10-20 GPU-hour SFT
+   data collection budget. Nothing runs until this flag is set.
 3. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
    `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up --
    current numbers (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`); this
