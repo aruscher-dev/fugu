@@ -276,39 +276,100 @@ PHASE_ADVANCERS = {
 }
 
 
-def main():
-    git_pull_if_clean()
-    state = load_state()
-    advanced_any = False
+# --- Minichess (5x5, Gardner variant) track advance functions --------------
+# Independent phase track (see state.json's "minichess_phase_order" /
+# "minichess_phases" and PLAN.md's "5x5 fast-validation track" addendum) --
+# runs alongside the main full-chess track, not serialized behind it. Cheap
+# enough (no GPU needed until m4) to validate the full Fugu pipeline (SFT +
+# CMA-ES) once here before Phases 3-9 spend real GPU-hours on full chess.
 
-    for phase_id in state["phase_order"]:
-        phase = state["phases"][phase_id]
+def advance_m0(state: dict) -> str:
+    """m0: install pyffish + download the Fairy-Stockfish binary. Fast,
+    CPU-only, deterministic -- run synchronously rather than via tmux."""
+    result = subprocess.run(["bash", str(PROJECT_DIR / "scripts" / "m0_setup_gardner_engine.sh")],
+                             capture_output=True, text=True)
+    print(result.stdout)
+    if result.returncode != 0:
+        print(f"[orchestrate] m0 setup failed:\n{result.stderr}")
+        return "blocked"
+    return "done"
+
+
+def advance_m1(state: dict) -> str:
+    """m1: GardnerBoard/GardnerScorer sanity check against hand-verified 5x5
+    positions -- gates whether the minichess reward pipeline is trustworthy
+    before m2's floor check spends any GPU-hours against it."""
+    marker = REPORTS_DIR / "m1_gardner_engine_verify_result.json"
+    session = f"{TMUX_SESSION_PREFIX}_m1_verify"
+
+    if marker.exists():
+        summary = json.loads(marker.read_text())
+        if summary.get("passed"):
+            return "done"
+        print(f"[orchestrate] m1 verify previously failed (engine_error="
+              f"{summary.get('engine_error')}) -- needs a dev session to fix, not a cron retry.")
+        return "blocked"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] m1 verify still running in tmux session '{session}'")
+        return "in_progress"
+
+    log_path = LOG_DIR / "m1_verify_gardner_engine.log"
+    cmd = f"cd {PROJECT_DIR} && {VENV_PYTHON} scripts/m1_verify_gardner_engine.py >> {log_path} 2>&1"
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
+MINICHESS_PHASE_ADVANCERS = {
+    "m0": advance_m0,
+    "m1": advance_m1,
+}
+
+
+def advance_track(state: dict, phase_order_key: str, phases_key: str, advancers: dict) -> bool:
+    """Advance one independent phase track by (at most) one step, following
+    the same never-block/first-non-done-phase logic as the main track.
+    Returns True if any phase in this track completed this run."""
+    advanced_any = False
+    for phase_id in state.get(phase_order_key, []):
+        phase = state[phases_key][phase_id]
         if phase["status"] == "done":
             continue
 
-        advancer = PHASE_ADVANCERS.get(phase_id)
+        advancer = advancers.get(phase_id)
         if advancer is None:
-            print(f"[orchestrate] phase {phase_id} has no script yet -- "
-                  f"needs a development session, not autonomous cron work. Stopping.")
+            print(f"[orchestrate] [{phases_key}] phase {phase_id} has no script yet -- "
+                  f"needs a development session, not autonomous cron work. Stopping this track.")
             break
 
         result = advancer(state)
         if result == "done":
             phase["status"] = "done"
-            print(f"[orchestrate] phase {phase_id}: DONE")
+            print(f"[orchestrate] [{phases_key}] phase {phase_id}: DONE")
             advanced_any = True
-            continue  # fall through to check the next phase in this same run
+            continue
         elif result == "in_progress":
             phase["status"] = "in_progress"
-            print(f"[orchestrate] phase {phase_id}: in progress, will re-check next run")
+            print(f"[orchestrate] [{phases_key}] phase {phase_id}: in progress, will re-check next run")
             break
         else:
-            print(f"[orchestrate] phase {phase_id}: {result}")
+            print(f"[orchestrate] [{phases_key}] phase {phase_id}: {result}")
             break
+    return advanced_any
+
+
+def main():
+    git_pull_if_clean()
+    state = load_state()
+
+    advanced_main = advance_track(state, "phase_order", "phases", PHASE_ADVANCERS)
+    advanced_minichess = advance_track(
+        state, "minichess_phase_order", "minichess_phases", MINICHESS_PHASE_ADVANCERS
+    ) if "minichess_phase_order" in state else False
 
     save_state(state)
     git_commit_and_push(f"orchestrate: automated status sync ({datetime.now(timezone.utc).isoformat()})")
-    if not advanced_any:
+    if not (advanced_main or advanced_minichess):
         print("[orchestrate] no phase completed this run")
 
 

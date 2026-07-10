@@ -75,8 +75,15 @@ none of it is required (this repo vendors what it needs).
   torch 2.11+cu128, transformers 5.8.1, peft 0.19.1, trl 0.29.1, accelerate — **this venv
   does not transfer**; recreate on the new host (`uv venv` + `uv pip install torch
   transformers peft trl accelerate bitsandbytes python-chess ag2 cma fastapi uvicorn
-  httpx pyyaml pandas scipy` — see exact versions actually used in the commit history /
-  below). Managed by `uv` — installs go through `uv add`/`uv pip install`, not raw pip.
+  httpx pyyaml pandas scipy pyffish` — see exact versions actually used in the commit
+  history / below). Managed by `uv` — installs go through `uv add`/`uv pip install`, not
+  raw pip. **This venv has no `pip` of its own** (`uv venv`-created) — a bare
+  `pip install X` silently falls through to the *system* pip (wrong Python version
+  entirely, e.g. 3.9 vs. this venv's 3.12) and installs to user site-packages instead of
+  the venv; always use `uv pip install --python <venv>/bin/python3 X` or activate+`uv
+  pip install X`. (`pyffish` has no prebuilt wheel for 3.12 — `uv pip install` builds it
+  from source automatically; see the "5x5 fast-validation track" addendum below for why
+  it's needed and the exact mistake this cost one session.)
 - **Do not install vllm into this venv** — its pinned torch range would likely force a
   downgrade and break the validated transformers/peft/trl stack. transformers+bitsandbytes
   also gives direct hidden-state access, which the orchestrator needs anyway.
@@ -263,3 +270,93 @@ open_fugu/
    at all — gated early (Phase 0.5).
 4. Shared host: GPU/disk/HF-cache may be shared with other users — check `nvidia-smi`
    before big runs, respect the 100GB project-disk cap.
+
+## Addendum: 5x5 (Gardner Minichess) fast-validation track + evolution demo
+
+**User request** (2026-07-10): build a demo showing the evolution of the coordinated
+worker pool across Fugu's training stages, on a 5x5 chess problem. Approved shape (see
+`AskUserQuestion` exchange this session): variant = **Gardner Minichess**; "evolution"
+means the **orchestrator's routing policy** evolving through three checkpoints —
+random routing (Phase 1 baseline) → SFT-trained selection head (Phase 4 design) →
+CMA-ES-evolved (Phase 8 design, originally a stretch goal) — same worker pool
+throughout; demo format = an interactive HTML page (Claude Artifact); and it should be
+**fully real** (actual inference/training, not mocked), run on the cheap 5x5 board
+first. This doubles as end-to-end validation of the SFT+CMA-ES machinery Phases 3-9
+still need to build for full chess, before those phases spend real GPU-hours — this
+track is **independent of and runs in parallel with** the main `phase_order` track
+above, not serialized behind it (see `state.json`'s separate `minichess_phase_order` /
+`minichess_phases`, and `scripts/orchestrate.py`'s `advance_track()` helper, which
+advances both tracks once per cron tick without either blocking the other).
+
+**Why Gardner Minichess specifically**: a real, well-defined 5x5 chess variant (one of
+each piece type, standard chess rules otherwise) with existing engine support, rather
+than an ad hoc truncated ruleset — this matters because the reward pipeline needs a
+real search-based evaluator, not just a legality checker.
+
+**Engine stack** (replaces `python-chess` + vanilla Stockfish for this track only):
+- **`pyffish`** (PyPI, C-extension binding to Fairy-Stockfish's move generator) for
+  legality/FEN/SAN — has no prebuilt wheel for this project's Python 3.12 venv, `uv pip
+  install pyffish` builds it from source (needs a C++ toolchain; worked out-of-the-box
+  on `lotte.polytechnique.fr`, same gcc used for Phase 0's Stockfish libstdc++
+  workaround). **Install via `uv`, not raw pip** — this venv has no `pip` of its own
+  (`uv venv`-created), so a bare `pip install` silently uses the *system* `pip3.9` and
+  installs into user site-packages with a `cp39` wheel that doesn't match the venv's
+  Python 3.12 at all (hit this exact mistake once this session — `pip --version` showed
+  `python 3.9` even with the venv "active"; `uv pip install --python /Data/.venv/bin/
+  python3 <pkg>` is the correct invocation, mirroring the rest of this project's deps).
+- **Fairy-Stockfish** binary (`bin/fairy-stockfish`, gitignored/host-specific like
+  `bin/stockfish` — `scripts/m0_setup_gardner_engine.sh` downloads it idempotently from
+  `github.com/fairy-stockfish/Fairy-Stockfish` releases) for search-based centipawn
+  eval (`pyffish` itself only does move generation, no search/eval — confirmed by
+  inspecting its exported symbols before assuming otherwise). Drives it via UCI
+  `setoption name UCI_Variant value gardner`. **Gotcha**: a one-shot
+  `printf 'uci\n...\ngo depth N\n' | ./fairy-stockfish` pipe returns near-instantly with
+  a garbage move — closing stdin (EOF) right after `go` is treated as an implicit stop.
+  Must keep the subprocess's stdin open across the whole game (see
+  `src/open_fugu/minichess/engine.py`'s persistent-`Popen` pattern) — this cost real
+  debugging time this session before being traced to the piping, not the engine.
+
+**Code layout** (`src/open_fugu/minichess/`):
+- `board.py` — `GardnerBoard`: pyffish-backed, duck-types the exact `chess.Board`
+  surface `harness.py` calls (`.turn`, `.legal_moves`, `.push_uci()`,
+  `.is_game_over()`/`.is_checkmate()`/`.is_stalemate()`/`.is_insufficient_material()`/
+  `.is_seventyfive_moves()`, `.move_stack`, `.fen()`, `.parse_san()`). Fivefold
+  repetition is NOT tracked (documented simplification — games are short, draws-by-
+  repetition aren't the signal this track cares about).
+- `engine.py` — `GardnerScorer`: same `MoveScore` shape as
+  `open_fugu.reward.stockfish_scorer.StockfishScorer`, but hand-rolls the UCI
+  send/read loop directly against `bin/fairy-stockfish` rather than reusing
+  `python-chess`'s `chess.engine.SimpleEngine` (which assumes a `chess.Board` in ways
+  that don't generalize to arbitrary UCI variants/board sizes).
+- `open_fugu.chess_blindfold.harness` gained one new parameter,
+  `board_factory: Callable[[], Any] = chess.Board`, threaded through both
+  `play_blindfold_vs_engine` and its async twin — pass `board_factory=GardnerBoard` for
+  this track. Zero behavior change for the full-chess track (default preserved).
+  Deliberately did NOT fork harness.py — the blindfold protocol itself
+  (opening-prompt formatting, move-history tracking, illegal-move termination) is
+  entirely board-size-agnostic; only board/legality/eval needed swapping.
+
+**Milestones** (`m0`-`m8` in `state.json`'s `minichess_phase_order`; `m0`/`m1` done
+this session, verified against hand-constructed Gardner positions the same way Phase
+2's sanity check verifies `StockfishScorer` — see `reports/m1_gardner_engine_verify_result.json`):
+
+| id | content |
+|---|---|
+| m0 | Engine setup: pyffish + Fairy-Stockfish binary, `gardner` variant verified |
+| m1 | `GardnerBoard`/`GardnerScorer` + `harness.py`'s `board_factory` param, sanity-checked against hand-verified positions + an end-to-end `play_blindfold_vs_engine()` smoke test |
+| m2 | Floor check on 5x5 with the existing worker pool (needs a small hand-verified opening book — none exists yet, don't guess moves, check against `pyffish.legal_moves` like m1's checks did) |
+| m3 | A2A wiring on 5x5 (reuse Phase 1's agents, `--variant gardner` flag) → **coordination checkpoint #1: random routing** |
+| m4 | SFT data collection on 5x5 (reuse Phase 3's design, cheap here) |
+| m5 | SVF + selection head + SFT training on 5x5 (reuse Phase 4's design — new engineering, biggest risk item) → **coordination checkpoint #2: SFT-trained routing** |
+| m6 | sep-CMA-ES on 5x5 (originally stretch Phase 8, done here first) → **coordination checkpoint #3: CMA-ES-evolved routing** |
+| m7 | Fixed eval suite: all 3 checkpoints through the same openings, full move-by-move logs to `reports/minichess_demo/*.json` |
+| m8 | **The actual deliverable**: interactive HTML demo (Claude Artifact) built from m7's logs — animated board, stage tabs/side-by-side across the 3 checkpoints, routing-distribution + ACPL charts |
+
+**For a fresh session/host picking this up**: run `scripts/m0_setup_gardner_engine.sh`
+(idempotent — installs `pyffish` into the venv via `uv`, downloads `bin/fairy-stockfish`)
+then `scripts/m1_verify_gardner_engine.py` to confirm the engine stack works on the new
+host before trusting it (same reasoning as Phase 0's "verify all of this again on the
+new machine" — `bin/` is gitignored/host-specific, doesn't transfer with the repo).
+`scripts/orchestrate.py`'s cron loop will do this automatically (`advance_m0`/
+`advance_m1`), same as the main track. m2 onward needs a dev session to write the
+script before cron can run it, per `orchestrate.py`'s own "no script yet" gating.

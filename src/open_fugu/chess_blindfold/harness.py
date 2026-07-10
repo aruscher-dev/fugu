@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 
 import chess
+
+BoardFactory = Callable[[], Any]  # defaults to chess.Board; pass GardnerBoard for 5x5
 
 MoveFn = Callable[[List[dict]], str]  # (messages) -> raw assistant text
 AsyncMoveFn = Callable[[List[dict]], Awaitable[str]]  # async variant, e.g. an A2A call
@@ -118,6 +120,7 @@ def play_blindfold_vs_engine(
     scorer=None,
     max_plies: int = 120,
     worker_id: Optional[str] = None,
+    board_factory: BoardFactory = chess.Board,
 ) -> GameResult:
     """Play one blindfold game: the LLM (via move_fn) against an engine baseline
     (e.g. Stockfish at a fixed skill level) that DOES see the board normally --
@@ -125,9 +128,12 @@ def play_blindfold_vs_engine(
 
     move_fn receives the full running message transcript (system-free, just
     user/assistant turns) and returns raw text; engine_best_move_fn receives the
-    real chess.Board and returns its move in UCI (the engine is not blindfolded).
+    board (real chess.Board by default) and returns its move in UCI (the engine
+    is not blindfolded). Pass board_factory=GardnerBoard (from
+    open_fugu.minichess.board) for the 5x5 track -- everything else about the
+    protocol is board-size-agnostic.
     """
-    board = chess.Board()
+    board = board_factory()
     for mv in opening_uci_moves:
         board.push_uci(mv)
 
@@ -208,6 +214,7 @@ async def play_blindfold_vs_engine_async(
     scorer=None,
     max_plies: int = 120,
     worker_id: Optional[str] = None,
+    board_factory: BoardFactory = chess.Board,
 ) -> GameResult:
     """Async twin of play_blindfold_vs_engine, for when the LLM side is
     reached over the network (e.g. an A2A call to a purple agent) rather than
@@ -217,7 +224,7 @@ async def play_blindfold_vs_engine_async(
     otherwise force every direct caller (e.g. the Phase 0.5 floor check) to
     become async too, for no benefit there.
     """
-    board = chess.Board()
+    board = board_factory()
     for mv in opening_uci_moves:
         board.push_uci(mv)
 

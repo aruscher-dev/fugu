@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-07-10T09:17:33.792485+00:00",
+  "engine_error": null,
+  "checks": [
+    {
+      "name": "board_wrapper_basics",
+      "passed": true,
+      "checks": {
+        "start_fen_matches_pyffish": true,
+        "turn_is_white_at_start": true,
+        "legal_moves_nonempty": true,
+        "push_uci_flips_turn": true,
+        "move_stack_tracks_history": true,
+        "is_game_over_false_after_one_move": true,
+        "is_checkmate_true_after_forced_mate": true,
+        "is_game_over_true_after_forced_mate": true
+      }
+    },
+    {
+      "name": "queen_hang_best_move",
+      "move": "c1c4",
+      "passed": true,
+      "is_legal": true,
+      "centipawn_loss": 0
+    },
+    {
+      "name": "queen_hang_blunder_move",
+      "move": "c1c3",
+      "passed": true,
+      "is_legal": true,
+      "is_blunder": true,
+      "centipawn_loss": 9994
+    },
+    {
+      "name": "queen_hang_illegal_move",
+      "move": "c1d3",
+      "passed": true,
+      "is_legal": false
+    },
+    {
+      "name": "corner_mate_forced_move",
+      "move": "a1a4",
+      "passed": true,
+      "is_legal": true,
+      "centipawn_loss": 0,
+      "played_cp": 10000,
+      "best_cp": 9999
+    },
+    {
+      "name": "opening_replay",
+      "moves": [
+        "c2c3",
+        "b4c3",
+        "b2c3",
+        "b5c3"
+      ],
+      "passed": true,
+      "all_legal": true,
+      "mean_acpl": 82.0
+    }
+  ],
+  "passed": true,
+  "note": "Sanity-checks GardnerBoard + GardnerScorer against hand-verified 5x5 positions (a free-queen best move, a hang-the-queen blunder, an illegal move, a forced corner-mate move) plus a short opening replay -- gates whether the minichess reward pipeline is trustworthy enough for M2's floor check and beyond."
+}

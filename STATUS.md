@@ -185,6 +185,55 @@ routine is now active -- it wrote Phase 2's and Phase 3's code, see "What's actu
 done" and "Cloud dev routine additions" above -- confirmed working as of 2026-07-10,
 including same-day fix-forward on Phase 2's first failed run.)
 
+## 5x5 (Gardner Minichess) fast-validation track + evolution demo (2026-07-10)
+
+New, **independent** phase track (`state.json`'s `minichess_phase_order` /
+`minichess_phases`, `m0`-`m8`) built this session in response to a user request: an
+interactive demo showing the orchestrator's routing policy evolve across Fugu's
+training stages (random routing → SFT-trained head → CMA-ES-evolved), on Gardner
+Minichess (5x5) instead of full chess -- cheap enough to validate the whole SFT+CMA-ES
+pipeline once before Phases 3-9 above spend real GPU-hours on it. Runs in parallel with
+the main track above (`scripts/orchestrate.py`'s `advance_track()` advances both once
+per cron tick, neither blocks the other). Full spec: PLAN.md's "5x5 fast-validation
+track" addendum -- read that before touching this, it has the milestone table and the
+exact engine-stack gotchas (pyffish/uv install trap, Fairy-Stockfish stdin-EOF trap).
+
+- **m0 (done)**: `pyffish` (legality/FEN, `uv pip install pyffish` -- has no 3.12 wheel,
+  builds from source) + `bin/fairy-stockfish` (search/eval, gitignored/host-specific,
+  `scripts/m0_setup_gardner_engine.sh` downloads it) -- `gardner` UCI variant verified
+  working on `lotte.polytechnique.fr`.
+- **m1 (done)**: `src/open_fugu/minichess/{board,engine}.py` (`GardnerBoard`/
+  `GardnerScorer`, chess.Board/StockfishScorer-shaped) + `harness.py` gained a
+  `board_factory=` param (default `chess.Board`, zero behavior change for full chess).
+  Verified via `scripts/m1_verify_gardner_engine.py` (hand-constructed positions with an
+  objectively known correct answer, same style as Phase 2's sanity check --
+  `reports/m1_gardner_engine_verify_result.json`, `passed: true`) plus a manual
+  end-to-end `harness.play_blindfold_vs_engine()` smoke test.
+- **m2 onward: not started** -- needs a dev session to write m2's floor-check script
+  (including a small hand-verified Gardner opening book, none exists yet) before cron
+  can run it, same "no script yet" gating as the main track.
+
+**IMPORTANT if resuming on a different host than `lotte.polytechnique.fr`**: `bin/`
+(including `bin/fairy-stockfish`) is gitignored and host-specific, same as the
+full-chess Stockfish binary -- it does NOT transfer with a `git clone`/`pull`. Run
+`scripts/m0_setup_gardner_engine.sh` then `scripts/m1_verify_gardner_engine.py --force`
+to re-verify the engine stack on the new host before trusting `state.json`'s `m0`/`m1:
+done` (that status reflects verification on `lotte.polytechnique.fr` specifically, not
+a portable guarantee). The venv itself also doesn't transfer -- see PLAN.md's "Ground
+truth" section for the full `uv venv` + dependency recreation steps, including the
+`pip`-vs-`uv pip` trap this session hit once (bare `pip install` silently uses the
+wrong Python/venv here).
+
+**One-machine-at-a-time note**: as of this write-up, Phase 3 (full-chess SFT data
+collection) is actively running in a `tmux` session (`openfugu-phase3_sft_data`) on
+`lotte.polytechnique.fr`, launched autonomously by that host's cron a few minutes
+before this section was written. If picking up the minichess track on a *different*
+host while that's still running, that's two hosts doing real GPU work
+simultaneously -- against this project's own hard constraint (see "Constraints to keep
+honoring" below). Check `state.json`'s phase `3` status / `ssh lotte.polytechnique.fr
+tmux ls` before launching anything GPU-heavy elsewhere; `m0`/`m1` are CPU-only and fine
+to re-verify anywhere, but `m2` onward needs real worker inference.
+
 ## Exact next steps
 
 1. `scripts/status.py` for a quick check; `state.json` is the source of truth.
@@ -193,15 +242,18 @@ including same-day fix-forward on Phase 2's first failed run.)
    ~10-20 GPU-hours) -- expect it to span many cron cycles. Per the note above, a human
    should sanity-check Phase 0.5's `REVIEW_NEEDED` numbers (or an early slice of Phase
    3's own output) before letting the full run complete unattended.
-3. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
+3. **Minichess track (`m2`)**: write the 5x5 floor-check script (small hand-verified
+   opening book + reuse `harness.py`'s `board_factory=GardnerBoard`) -- see the section
+   above and PLAN.md's addendum for the full spec.
+4. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
    `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up --
    current numbers (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`); this
    would also directly improve Phase 3's SFT data quality if done first.
-4. **Phase 1 extension**: add the other candidate workers as their own A2A agents
+5. **Phase 1 extension**: add the other candidate workers as their own A2A agents
    (currently only `qwen2.5-7b` has been run as a purple agent; `worker_agent.py` takes
    any `CANDIDATE_WORKERS` short id via `--worker`), and update
    `orchestrator_agent.py`'s `--workers` CLI arg / the scenario TOML accordingly.
-5. **Phase 4** is when per-query (not per-game) routing actually matters -- revisit
+6. **Phase 4** is when per-query (not per-game) routing actually matters -- revisit
    `orchestrator_agent.py`'s "Phase 1 scope" code comment before assuming random
    per-game routing is still fine once the real selection head exists. Phase 4 is also
    where Phase 3's raw per-sample records turn into r̄-per-worker/position and a

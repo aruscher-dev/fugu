@@ -58,6 +58,55 @@
     "8",
     "9"
   ],
+  "minichess_phases": {
+    "m0": {
+      "status": "done",
+      "note": "5x5 (Gardner Minichess) engine setup: pyffish (move legality/FEN, installed via `uv pip install pyffish` -- do NOT use raw pip, see PLAN.md) + Fairy-Stockfish binary (bin/fairy-stockfish, gitignored/host-specific like bin/stockfish, re-downloaded by scripts/m0_setup_gardner_engine.sh). Verified the 'gardner' UCI_Variant on lotte.polytechnique.fr."
+    },
+    "m1": {
+      "status": "done",
+      "note": "GardnerBoard (src/open_fugu/minichess/board.py, pyffish-backed, chess.Board-duck-typed) + GardnerScorer (src/open_fugu/minichess/engine.py, hand-rolled persistent UCI driver against bin/fairy-stockfish -- StockfishScorer-shaped MoveScore). harness.py generalized with a board_factory= param (default chess.Board, pass GardnerBoard for this track) -- zero behavior change for the full-chess track. All verified via scripts/m1_verify_gardner_engine.py (reports/m1_gardner_engine_verify_result.json, passed=true) plus a manual end-to-end harness.play_blindfold_vs_engine() smoke test (legal-move scoring path and illegal-move termination path both exercised)."
+    },
+    "m2": {
+      "status": "not_started",
+      "note": "Floor check: re-run Phase 0.5's blindfold legal-move-rate check on 5x5 with the existing worker pool (qwen2.5-7b, mistral-7b, deepseek-r1-distill-qwen-7b), using harness.py's new board_factory=GardnerBoard + GardnerScorer. Needs a small opening book for gardner (none exists yet -- pick 2-4 short, verified-legal lines the way m1's verify script's OPENING_PLIES was hand-checked against pyffish.legal_moves, don't guess). Needs GPU (worker inference). This is coordination checkpoint #1 (random-routing baseline) once wired into A2A in m3."
+    },
+    "m3": {
+      "status": "not_started",
+      "note": "A2A/AgentBeats wiring on 5x5, reusing Phase 1's worker_agent.py/orchestrator_agent.py/chess_green_agent.py with a --variant gardner flag (random routing, same dummy-orchestrator scope as Phase 1). This produces the demo's coordination checkpoint #1 (random routing)."
+    },
+    "m4": {
+      "status": "not_started",
+      "note": "SFT data collection on 5x5 (Phase 3's design, reused/parameterized) -- cheap here (small board, short games)."
+    },
+    "m5": {
+      "status": "not_started",
+      "note": "SVF + selection head implementation + SFT training on 5x5 (Phase 4's design). New engineering, not just re-running existing scripts -- peft has no SVF support (hand-rolled: one-time SVD per target nn.Linear, freeze U/Vh, train only a z vector rescaling S). Produces the demo's coordination checkpoint #2 (SFT-trained routing)."
+    },
+    "m6": {
+      "status": "not_started",
+      "note": "sep-CMA-ES evolutionary fine-tuning on 5x5 (originally stretch Phase 8 for full chess -- done here first since it's cheap and de-risks that stretch goal). Produces the demo's coordination checkpoint #3 (CMA-ES-evolved routing)."
+    },
+    "m7": {
+      "status": "not_started",
+      "note": "Fixed evaluation suite: run all 3 checkpoints (m3 random / m5 SFT / m6 CMA-ES) through the same fixed set of openings/positions, log full move-by-move data (routing choice, worker move, legality, ACPL, outcome) to reports/minichess_demo/*.json. This is the data source for the interactive demo (m8)."
+    },
+    "m8": {
+      "status": "not_started",
+      "note": "Build the interactive HTML demo (Claude Artifact) from m7's logs: animated 5x5 board, stage tabs/side-by-side comparison across the 3 coordination checkpoints, routing-distribution + ACPL charts, step/play controls. This is the actual deliverable the user asked for."
+    }
+  },
+  "minichess_phase_order": [
+    "m0",
+    "m1",
+    "m2",
+    "m3",
+    "m4",
+    "m5",
+    "m6",
+    "m7",
+    "m8"
+  ],
   "host": "lotte.polytechnique.fr",
   "last_orchestrate_run": "2026-07-10T09:15:01.822914+00:00"
 }
