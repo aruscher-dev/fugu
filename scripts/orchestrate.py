@@ -342,6 +342,67 @@ def advance_phase_4(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_5(state: dict) -> str:
+    """Phase 5: baseline + Open-Fugu blindfold matches (PLAN.md phase table:
+    "5 conditions x ~25 games" -- 3 solo-worker baselines, Phase 1's random-
+    routing orchestrator, and Phase 5's own per-query Open-Fugu SFT-routed
+    orchestrator using Phase 4's checkpoint). Follows advance_phase_3/4's
+    pattern (not Phase 0.5/m2's) -- scripts/phase5_baseline_and_fugu_matches.py
+    writes its own tracked reports/phase5_summary.json (IN_PROGRESS while any
+    of the 5 conditions are still missing, COMPLETE once all are in), so this
+    advancer just reads that verdict rather than re-deriving it, same as
+    advance_phase_3/4 do with their own summary files.
+
+    Unlike Phase 2/4 (safe to auto-run) but like Phase 3: this is exactly
+    the ~25 GPU-hour spend Phase 0.5's REVIEW_NEEDED floor check
+    (reports/phase0_5_summary.json) is meant to gate, PLUS it plays real
+    matches with Phase 4's checkpoint -- whose own reports/phase4_summary.json
+    explicitly flags that a human should sanity-check final_loss/
+    mean_loss_last_50 before trusting it here. So this additionally requires
+    the same explicit human sign-off flag Phase 3 used
+    (phases["5"].gpu_spend_approved == true) before it will tmux-launch the
+    match script. See STATUS.md."""
+    summary_path = REPORTS_DIR / "phase5_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}5_matches"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+        done = {c: v["n_games"] for c, v in summary.get("conditions", {}).items()}
+    else:
+        done = None
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 5 matches still running in tmux session '{session}'"
+              + (f" (progress: {done})" if done else ""))
+        return "in_progress"
+
+    if not state["phases"].get("5", {}).get("gpu_spend_approved"):
+        print("[orchestrate] phase 5 BLOCKED pending human sign-off: Phase 0.5's floor check came back "
+              "REVIEW_NEEDED (see reports/phase0_5_summary.json) and Phase 4's checkpoint "
+              "(reports/phase4_summary.json) hasn't been sanity-checked either -- this phase spends "
+              "~25 real GPU-hours playing matches with both. Set phases[\"5\"].gpu_spend_approved = true "
+              "in state.json once reviewed (see STATUS.md) to let this launch.")
+        return "blocked"
+
+    if not (PROJECT_DIR / "checkpoints" / "phase4_sft" / "backbone_head_svf.pt").exists():
+        print("[orchestrate] phase 5 waiting on Phase 4's checkpoint "
+              "(checkpoints/phase4_sft/backbone_head_svf.pt not found yet)")
+        return "blocked"
+
+    # Not running and not complete, and human-approved -- (re)launch. The
+    # underlying script skips any condition whose result file already
+    # exists, so a crash-and-cron-relaunch resumes rather than restarting.
+    log_path = LOG_DIR / "phase5_baseline_and_fugu_matches.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/phase5_baseline_and_fugu_matches.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
@@ -349,6 +410,7 @@ PHASE_ADVANCERS = {
     "2": advance_phase_2,
     "3": advance_phase_3,
     "4": advance_phase_4,
+    "5": advance_phase_5,
 }
 
 

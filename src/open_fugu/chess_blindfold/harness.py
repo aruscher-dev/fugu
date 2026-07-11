@@ -91,6 +91,48 @@ def format_opponent_move_prompt(mv: str) -> str:
     return f"Opponent played {mv}. What is your move? {MOVE_FORMAT_INSTRUCTION}"
 
 
+# Inverts format_opening_prompt/format_opponent_move_prompt well enough for a
+# STATELESS per-query dispatcher (Phase 5's Fugu-router orchestrator, see
+# a2a/orchestrator_agent.py) to reconstruct the running move history from
+# only the latest turn's raw text, without a chess.Board of its own --
+# deliberately regex-based rather than routed through extract_uci_move
+# (which needs a board to check legality): the orchestrator never sees the
+# real board (blindfold-ness stays server-side, on the green judge), so this
+# only ever extracts what the judge's own controlled prompt text already
+# told the LLM side, not an arbitrary/untrusted move.
+OPENING_COLOR_RE = re.compile(r"playing with (white|black) pieces")
+OPENING_HISTORY_RE = re.compile(r"[Cc]urrent move history is (.*?)\.\s*What is your move\?")
+OPPONENT_MOVE_RE = re.compile(r"Opponent played ([a-h][1-8]-?[a-h][1-8][qrbn]?)\.", re.IGNORECASE)
+
+
+def parse_orchestrator_turn(text: str) -> dict:
+    """Returns {"color": "white"|"black"|None, "opening_moves": [...],
+    "opponent_moves": [...]}.
+
+    `opening_moves` is only non-empty on the very first turn of a game (when
+    the "Current move history is ..." preamble is present); `opponent_moves`
+    holds every "Opponent played X" move embedded in THIS turn's text --
+    normally one, except the very first turn of a game where the LLM plays
+    black, where harness.py folds the engine's reply to the fixed opening
+    into that same initial message (see play_blindfold_vs_engine's
+    docstring), giving two.
+    """
+    color_match = OPENING_COLOR_RE.search(text)
+    color = color_match.group(1) if color_match else None
+
+    opening_moves: List[str] = []
+    history_match = OPENING_HISTORY_RE.search(text)
+    if history_match:
+        opening_moves = [
+            "".join(g for g in m.groups() if g).lower()
+            for m in UCI_RE.finditer(history_match.group(1))
+        ]
+
+    opponent_moves = [m.group(1).replace("-", "").lower() for m in OPPONENT_MOVE_RE.finditer(text)]
+
+    return {"color": color, "opening_moves": opening_moves, "opponent_moves": opponent_moves}
+
+
 @dataclass
 class PlyRecord:
     ply: int

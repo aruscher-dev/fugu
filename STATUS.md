@@ -1,16 +1,16 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-10 (cloud dev routine -- wrote Phase 4, see "Cloud dev routine
-additions" below; `minichess_phase_order` track unchanged this run). Phase 0, 0.5, 1, 2,
-and now **3 are all complete** on `lotte.polytechnique.fr` -- Phase 3's
-`reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records: 400
-positions x 4 samples x 3 workers, all three of `qwen2.5-7b`/`mistral-7b`/
-`deepseek-r1-distill-qwen-7b` fully collected). **Phase 4 (SVF + selection head + SFT
-training) has been written this session and is now `pending`**, awaiting the GPU host's
-cron to actually run it -- no additional human sign-off gate on top (see "Cloud dev
-routine additions" below for why), but see that section's closing note on why a human
-should still sanity-check the resulting checkpoint before Phase 5 spends GPU-hours on
-real matches with it.
+Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 5, see "Cloud dev routine
+additions (2026-07-11)" below; `minichess_phase_order` track unchanged this run). Phase
+0 through **4 are all complete** on `lotte.polytechnique.fr`: Phase 3's
+`reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records) and Phase
+4's `reports/phase4_summary.json` shows `verdict: COMPLETE` (`final_loss=0.717`,
+`mean_loss_last_50=1.711`, checkpoint at `checkpoints/phase4_sft/backbone_head_svf.pt`
+on that host -- gitignored, doesn't travel with the repo). **Phase 5 (baseline +
+Open-Fugu blindfold matches) has been written this session and is now `pending`**,
+gated behind an explicit `gpu_spend_approved` human sign-off (see "Cloud dev routine
+additions (2026-07-11)" below for why) before the GPU host's cron will actually launch
+it.
 See `PLAN.md` for the full approved plan this implements.
 
 ## What's actually done
@@ -106,6 +106,145 @@ happened in substance. The flag stays `true` in `state.json`; its ongoing value 
 protecting any *future* crash-and-cron-relaunch of a similarly GPU-heavy phase from
 resuming unattended without an equivalent check-in.
 
+## Cloud dev routine additions (2026-07-11)
+
+- **Phase 5 (baseline + Open-Fugu blindfold matches) -- code written, status `pending` +
+  `gpu_spend_approved: false` in `state.json`, NOT AUTO-LAUNCHABLE.** Per PLAN.md's phase
+  table: "5 conditions x ~25 games." Written by the cloud dev routine (no GPU/A2A runtime
+  access there) -- verification limited to `python3 -m py_compile` on every new/changed
+  file, plus pure-logic unit tests run in a throwaway sandbox venv (`pip install
+  a2a-sdk==0.3.5 uvicorn httpx torch transformers python-chess` -- all CPU-only, no
+  models/GPU needed to exercise this code's actual logic paths):
+  - Real `a2a.types` `TaskArtifactUpdateEvent`/`Message`/`Part` objects round-tripped
+    through the new result-capturing consumer (see below) to confirm it correctly
+    extracts the final `EvalResult` JSON artifact and ignores plain-text status updates.
+  - `RandomStickyDispatch` (the refactored-out Phase 1 routing logic, see below) checked
+    against a fake `ToolProvider`: same context stays on the same worker across calls
+    with `new_conversation` true only on the first; different contexts route
+    independently. Confirms the refactor is behavior-preserving for existing callers.
+  - `FuguSelectionDispatch` (new, see below) checked against a fake `ToolProvider` +
+    fake backbone (fixed argmax, no real model weights): per-context move-history
+    accumulation across turns, that every worker call is stateless
+    (`new_conversation=True` always, unlike `RandomStickyDispatch`), that the
+    reconstructed prompt sent to the worker actually contains the full history (not
+    just the latest delta), and that two concurrent game contexts don't leak state into
+    each other.
+  - `harness.parse_orchestrator_turn()` (new, see below) checked against
+    `format_opening_prompt`/`format_opponent_move_prompt`'s own output for all 4 cases
+    that actually occur in a game: white's opening turn, black's opening turn (which
+    folds the engine's first reply into the same message), a plain mid-game delta turn,
+    and a hyphenated move (`e2-e4`) normalizing correctly.
+  - `advance_phase_5` dry-run verified in `orchestrate.py` (mocked `tmux_session_exists`/
+    `tmux_launch`, real gate/state logic) across all 6 reachable states: blocked on no
+    `gpu_spend_approved`, blocked on missing Phase 4 checkpoint, launches once both are
+    satisfied, doesn't relaunch while its tmux session is still up, resumes correctly
+    from a partial (`IN_PROGRESS`-verdict) summary, and reports `done` once the summary's
+    verdict is `COMPLETE`.
+  - **The next GPU-host cron run (once a human flips `gpu_spend_approved`) is what
+    actually confirms this end-to-end** -- real A2A network calls between real agent
+    processes, real worker inference, and a real `OrchestratorBackbone.forward()` pass
+    against Phase 4's actual checkpoint are all things this sandbox cannot exercise.
+
+  **The 5 conditions** (PLAN.md's Architecture section: "Open-Fugu vs. each solo worker
+  vs. random-routing"): one `solo_<worker>` condition per default worker (the green
+  judge's `fugu_orchestrator` participant points directly at that worker agent's own
+  A2A URL -- no new green-judge code needed, since a worker agent and the orchestrator
+  agent expose the exact same single-skill interface), `random_routing` (Phase 1's
+  dummy orchestrator, full worker pool), and `open_fugu_sft` (Phase 5's new
+  `FuguSelectionDispatch` orchestrator using Phase 4's checkpoint). That's 3 + 1 + 1 = 5,
+  matching PLAN.md's phase-table count exactly -- **a design decision worth flagging**:
+  PLAN.md's Architecture section also mentions a "majority-vote" baseline (repeated in
+  Phase 6's own line in the phase table), which this phase does NOT implement as a
+  live-play condition (it would need per-ply cross-worker comparison at identical
+  positions, a different game loop than the rest of this phase's single-orchestrator-
+  per-game structure) -- if still wanted, it's more naturally a Phase 6 analysis derived
+  from the 3 solo conditions' data, or a 6th live condition added later. Worth a second
+  look before Phase 6 assumes it's covered.
+
+  - `src/open_fugu/a2a/orchestrator_agent.py` -- **refactored** into a dispatch-strategy
+    pattern (`RandomStickyDispatch` / `FuguSelectionDispatch`, both exposing the same
+    `async dispatch(ctx_id, user_input, tool_provider) -> str`), replacing the inline
+    random-pick logic `OrchestratorAgentExecutor` used to own directly. `--router
+    {random,fugu}` CLI flag added (default `random`, so every existing caller --
+    Phase 1's scenario TOML/smoke test -- is unaffected byte-for-byte in behavior).
+    `FuguSelectionDispatch` is the "stateless full-transcript-forwarding redesign" this
+    file's own docstring (and STATUS.md's "Exact next steps") had been flagging as still
+    open since Phase 1: rather than relaying each turn's raw delta text to a sticky
+    worker, it reconstructs the FULL move history from `parse_orchestrator_turn()`
+    (new, see below) on every single query, runs Phase 4's trained
+    `OrchestratorBackbone.forward()` on that history reformatted via
+    `harness.format_opening_prompt()`, argmaxes the resulting logits to pick a worker,
+    and opens a brand-new worker-side A2A context (`new_conversation=True`) every time
+    -- so switching workers between queries never drops context, because nothing is
+    ever relied on to persist worker-side. Never touches a real `chess.Board`
+    (blindfold-ness/legality checking stays entirely server-side on the green judge,
+    same split as everywhere else in this project) -- history reconstruction is
+    regex-based against the judge's own controlled prompt text, not board-validated;
+    documented as a best-effort continuity mechanism only (an actually-illegal move
+    still gets caught by the green judge's real board on the very next ply regardless).
+  - `src/open_fugu/chess_blindfold/harness.py` -- added `parse_orchestrator_turn()`,
+    inverting `format_opening_prompt`/`format_opponent_move_prompt` well enough for a
+    stateless orchestrator to reconstruct move history without its own board. Read this
+    module's new docstring before touching `MOVE_FORMAT_INSTRUCTION`'s wording -- it
+    embeds example UCI-looking tokens (`e2e4`, `e7e8q`) that a naive whole-string
+    regex scan would misparse as real moves; the new regexes are anchored to the
+    judge's specific "Current move history is..."/"Opponent played..." phrasing rather
+    than scanning raw text for that reason.
+  - `src/open_fugu/a2a/chess_green_agent.py` -- small addition: each game's summary dict
+    now also carries `mean_acpl`/`blunder_rate` (computed exactly like Phase 0.5's
+    floor-check script already does from the same per-ply `PlyRecord` data), not just
+    `legal_move_rate`. Needed so Phase 5's real evaluation matches actually capture the
+    metrics Phase 6's report needs -- Phase 1's smoke test never needed this (it only
+    checked `passed`/returncode), so it was never plumbed through until now. Backward
+    compatible: adds keys, doesn't change any existing ones.
+  - `src/open_fugu/eval/run_eval_matches.py` (new) -- the actual condition-runner:
+    starts exactly the agent processes each condition needs (one worker for `solo_*`,
+    the full pool + orchestrator for `random_routing`/`open_fugu_sft`, plus a fresh
+    green judge every time), waits for A2A readiness, sends the `EvalRequest`(s), tears
+    everything down, returns a merged `EvalResult`-shaped dict. **One deliberate
+    engineering decision worth flagging**: `agentbeats/client.py`'s vendored
+    `send_message()` hardcodes a 300s httpx timeout for the whole call -- fine for
+    every existing caller (a single worker turn, or Phase 1's 2-game/8-ply smoke test)
+    but a real `n_games=25` condition can easily run past that on 7-8B inference.
+    Rather than edit that vendored constant, this splits each condition's games into
+    small per-`EvalRequest` batches (`DEFAULT_GAMES_PER_REQUEST = 3`) and merges the
+    results -- `chess_green_agent.run_eval` already resets all per-game/per-request
+    state on every call, so this is behaviorally identical to one big request, just
+    several smaller round-trips. Also adds `_Capture`, a small consumer that mirrors
+    `agentbeats/client_cli.py`'s own event-handling almost verbatim but accumulates the
+    final `EvalResult` artifact instead of printing it -- deliberately structured as a
+    near-copy of already-proven-working code (Phase 1's smoke test exercised
+    `client_cli.py`'s exact event-consumption path) rather than re-deriving A2A
+    streaming semantics from scratch, since this sandbox has no way to test the real
+    network/streaming behavior end-to-end.
+  - `scripts/phase5_baseline_and_fugu_matches.py` (new) -- thin CLI, same
+    collect-then-aggregate discipline as Phase 3/4: loops over the 5 conditions,
+    skipping any whose `logs/phase5_matches/<condition>.json` result already exists
+    (idempotent, same per-unit-skip pattern as Phase 0.5/3), and writes the tracked
+    `reports/phase5_summary.json` (compact per-condition digest: `n_games`,
+    `mean_legal_move_rate`, `any_illegal_termination` -- `IN_PROGRESS`/`COMPLETE`).
+    Deliberately does NOT compute ACPL/blunder-rate/win-rate aggregates itself -- that's
+    Phase 6's explicit job per PLAN.md's phase table; this phase's own job stops at
+    "play the games and record what happened," mirroring Phase 3's
+    collect-vs-Phase-4's-aggregate split. Default `n_games=25` per condition,
+    `max_plies=60` (real matches, not Phase 0.5's short 24-ply floor check), same Ruy
+    Lopez default opening as Phase 0.5/1.
+  - `advance_phase_5` added to `scripts/orchestrate.py` + registered in
+    `PHASE_ADVANCERS`, following `advance_phase_3`/`4`'s pattern (reads the phase
+    script's own tracked summary verdict rather than re-deriving it, unlike Phase
+    0.5/m2's per-unit-aggregation pattern). **Requires the same explicit
+    `gpu_spend_approved` human sign-off gate Phase 3 used** -- unlike Phase 2/4 (safe to
+    auto-run), Phase 5 is exactly the ~25 GPU-hour spend Phase 0.5's `REVIEW_NEEDED`
+    floor check is meant to gate, *and* it plays real matches with Phase 4's checkpoint,
+    whose own `reports/phase4_summary.json` explicitly flags that a human should
+    sanity-check `final_loss`/`mean_loss_last_50` first. **Unlike Phase 3's flag (which
+    was retroactively set `true` because a human had already actively engaged with that
+    exact run before the gate existed), no equivalent human engagement exists yet for
+    Phase 5 -- `gpu_spend_approved` stays `false` here.** A human should look at both
+    `reports/phase0_5_summary.json` and `reports/phase4_summary.json`, then flip
+    `state.json`'s `phases["5"].gpu_spend_approved` to `true` to let the GPU host's cron
+    launch this.
+
 ## Cloud dev routine additions (2026-07-10)
 
 - **Phase 4 (SVF + selection head implementation, SFT training) -- code written, status
@@ -142,15 +281,17 @@ resuming unattended without an equivalent check-in.
     `selection_head = nn.Linear(hidden_size, L)` on top of the last-token hidden state
     (`L` = number of candidate workers, fixed output order = `config.worker_ids`).
     `trainable_parameters()` yields exactly the SVF `z` vectors + the selection head's own
-    parameters -- everything else in the backbone stays frozen throughout. **Not yet
-    wired into `a2a/orchestrator_agent.py`'s actual dispatch logic** -- that orchestrator
-    still does Phase 1's random-per-game routing; per the existing code comment there,
-    real per-query routing also needs a stateless full-transcript-forwarding redesign
-    (since worker agents keep conversation state server-side keyed by A2A `context_id`),
-    which is deferred to whichever of Phase 4/5 actually plays matches with this
-    checkpoint -- this phase's own scope (per `state.json`'s original note and PLAN.md's
-    phase table) is "SVF/head implementation + SFT training," not wiring it into live
-    A2A dispatch.
+    parameters -- everything else in the backbone stays frozen throughout. **As of this
+    (2026-07-10) write-up, not yet wired into `a2a/orchestrator_agent.py`'s actual
+    dispatch logic** -- that orchestrator still does Phase 1's random-per-game routing;
+    per the existing code comment there, real per-query routing also needs a stateless
+    full-transcript-forwarding redesign (since worker agents keep conversation state
+    server-side keyed by A2A `context_id`), which is deferred to whichever of Phase 4/5
+    actually plays matches with this checkpoint -- this phase's own scope (per
+    `state.json`'s original note and PLAN.md's phase table) is "SVF/head implementation
+    + SFT training," not wiring it into live A2A dispatch. **Done as of 2026-07-11's
+    Phase 5 write-up** -- see "Cloud dev routine additions (2026-07-11)" above,
+    `FuguSelectionDispatch`.
   - `src/open_fugu/train/train_sft.py` -- deliberately split into a pure half
     (`build_soft_targets()`/`mean_reward_per_position()`/`softmax()`/`load_positions()`
     /`load_jsonl()`, no torch import at module level, tested in the sandbox as described
@@ -365,37 +506,38 @@ to re-verify anywhere, but `m2` onward needs real worker inference.
 ## Exact next steps
 
 1. `scripts/status.py` for a quick check; `state.json` is the source of truth.
-2. **Phase 4 (SVF + selection head + SFT training) -- DONE writing, `pending`
-   execution.** Code written this session (see "Cloud dev routine additions" above);
-   `advance_phase_4` will launch `scripts/phase4_train_sft.py` on the GPU host's next
-   cron tick, no extra approval gate. Once `reports/phase4_summary.json` lands, a
-   human/dev session should read `final_loss`/`mean_loss_last_50` there before Phase 5
-   spends GPU-hours on real matches using the resulting checkpoint -- Phase 0.5's floor
-   check is still `REVIEW_NEEDED` for this worker pool, so it's worth confirming the
-   head actually learned a non-trivial routing signal rather than fitting near-uniform
-   soft targets.
-3. **Minichess track (`m2`) -- DONE writing, `pending` execution.** Floor-check script +
-   opening book written earlier this session (see "5x5 (Gardner Minichess)..." section
-   above); `advance_m2` will launch it on the GPU host's next cron tick. Once
-   `reports/m2_gardner_floor_check_summary.json` lands, a human/dev session should read
-   its verdict before m3 (A2A wiring) is built against this worker pool, same spirit as
-   Phase 0.5's gate.
-4. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
+2. **A human needs to review two verdicts, then flip `state.json`'s
+   `phases["5"].gpu_spend_approved` to `true`** before Phase 5 can launch:
+   `reports/phase0_5_summary.json` (`REVIEW_NEEDED`, 0/44/22% legal-move rate across the
+   default worker pool) and `reports/phase4_summary.json` (`final_loss=0.717`,
+   `mean_loss_last_50=1.711` -- does the selection head look like it learned a
+   non-trivial routing signal, or did it fit near-uniform soft targets because the
+   swarm mostly produces illegal moves?). Until then `advance_phase_5` reports
+   `blocked` every cron tick, by design -- see "Cloud dev routine additions
+   (2026-07-11)" above.
+3. **Phase 5 (baseline + Open-Fugu blindfold matches) -- DONE writing, `pending`
+   execution** (gated on step 2 above). Code written this session -- see "Cloud dev
+   routine additions (2026-07-11)" above, including the "5 conditions" design decision
+   (no separate majority-vote condition) worth a second look.
+4. **Minichess track (`m2`) -- DONE writing, `pending` execution.** Floor-check script +
+   opening book written 2026-07-10 (see "5x5 (Gardner Minichess)..." section below);
+   `advance_m2` should have already run on the GPU host's cron by now --
+   `reports/m2_gardner_floor_check_summary.json` shows `REVIEW_NEEDED` (0% legal-move
+   rate for all 3 default workers on 5x5, worse than full chess) -- a human should look
+   at this before m3 (A2A wiring) is built against this worker pool on the minichess
+   track, same spirit as Phase 0.5's gate. `m3` onward is still `not_started`.
+5. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
    `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up --
    current numbers (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`); this
    would also directly improve the quality of both Phase 3's already-collected SFT data
-   and Phase 4's resulting checkpoint if done and re-run first.
-5. **Phase 1 extension**: add the other candidate workers as their own A2A agents
-   (currently only `qwen2.5-7b` has been run as a purple agent; `worker_agent.py` takes
-   any `CANDIDATE_WORKERS` short id via `--worker`), and update
-   `orchestrator_agent.py`'s `--workers` CLI arg / the scenario TOML accordingly.
-6. **Wiring Phase 4's trained selection head into live A2A dispatch** is still open --
-   `a2a/orchestrator_agent.py` still does Phase 1's random-per-game routing;
-   `models/worker_backend.py`'s `OrchestratorBackbone` exists now but isn't called from
-   there yet. Per the existing code comment in `orchestrator_agent.py`, real per-query
-   routing also needs a stateless full-transcript-forwarding redesign (worker agents
-   keep conversation state server-side keyed by A2A `context_id`) -- likely Phase 5's
-   job, since that's when Open-Fugu actually plays matches with this checkpoint.
+   and Phase 4's resulting checkpoint if done and re-run first. Given the minichess
+   track's m2 numbers are even weaker (0% across the board), this is worth doing before
+   spending more GPU-hours on either track.
+6. **Phase 1 extension**: add the other candidate workers as their own A2A agents
+   (currently only `qwen2.5-7b` has been run as a standalone purple agent outside of
+   Phase 5's own process-launching; `worker_agent.py` takes any `CANDIDATE_WORKERS`
+   short id via `--worker`), and update `orchestrator_agent.py`'s `--workers` CLI arg /
+   the scenario TOML accordingly.
 
 ## Constraints to keep honoring
 

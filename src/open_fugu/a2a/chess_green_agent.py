@@ -93,6 +93,7 @@ class ChessBlindfoldGreenAgent(GreenAgent):
                         max_plies=max_plies,
                     )
                     legal_plies = [p for p in result.plies if p.legal]
+                    losses = [p.centipawn_loss for p in legal_plies if p.centipawn_loss is not None]
                     games_summary.append({
                         "game_idx": g,
                         "llm_color": "white" if llm_color == chess.WHITE else "black",
@@ -100,6 +101,8 @@ class ChessBlindfoldGreenAgent(GreenAgent):
                         "termination": result.termination,
                         "n_plies": len(result.plies),
                         "legal_move_rate": (len(legal_plies) / len(result.plies)) if result.plies else None,
+                        "mean_acpl": (sum(losses) / len(losses)) if losses else None,
+                        "blunder_rate": (sum(p.is_blunder for p in legal_plies) / len(legal_plies)) if legal_plies else None,
                         "final_fen": result.final_fen,
                     })
                 except Exception as e:
@@ -110,6 +113,8 @@ class ChessBlindfoldGreenAgent(GreenAgent):
                         "termination": f"error: {type(e).__name__}: {e}",
                         "n_plies": 0,
                         "legal_move_rate": None,
+                        "mean_acpl": None,
+                        "blunder_rate": None,
                         "final_fen": None,
                     })
                 finally:

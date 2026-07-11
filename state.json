@@ -26,8 +26,9 @@
       "note": "SVF + selection head implementation, SFT training -- code written (src/open_fugu/models/{svf,worker_backend}.py + src/open_fugu/train/train_sft.py + scripts/phase4_train_sft.py), registered as advance_phase_4 in orchestrate.py. Cloud dev routine (no GPU/model access) -- verification limited to py_compile plus pure-logic checks of build_soft_targets()/softmax()/mean_reward_per_position() against hand-constructed records (no torch needed for that half). The next GPU-host cron run should confirm the SVD/backbone/training-loop half (models/svf.py's apply_svf, models/worker_backend.py's OrchestratorBackbone, train_sft.py's train()) actually works end-to-end before trusting the resulting checkpoint -- see STATUS.md."
     },
     "5": {
-      "status": "not_started",
-      "note": "baseline + Open-Fugu blindfold matches"
+      "status": "pending",
+      "gpu_spend_approved": false,
+      "note": "Baseline + Open-Fugu blindfold matches (5 conditions x ~25 games: 3 solo-worker baselines, Phase 1's random-routing orchestrator, Phase 5's own per-query Open-Fugu SFT-routed orchestrator using Phase 4's checkpoint). Code written (src/open_fugu/eval/run_eval_matches.py, scripts/phase5_baseline_and_fugu_matches.py, plus a2a/orchestrator_agent.py's new FuguSelectionDispatch -- the real per-query routing this project's docs had flagged as still open) and registered as advance_phase_5 in orchestrate.py. gpu_spend_approved is false (unlike Phase 3's, which was retroactively set true because a human had already engaged with that exact run before the gate existed) -- no equivalent human engagement exists yet for Phase 5, and it spends real GPU-hours (~25hr est.) against both Phase 0.5's REVIEW_NEEDED floor check and Phase 4's not-yet-sanity-checked checkpoint. A human should review both, then flip this to true. See STATUS.md."
     },
     "6": {
       "status": "not_started",
