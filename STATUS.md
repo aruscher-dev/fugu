@@ -1,7 +1,7 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 7, see "Cloud dev routine
-additions (2026-07-11c)" below; `minichess_phase_order` track unchanged this run). Phase
+Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 8, see "Cloud dev routine
+additions (2026-07-11d)" below; `minichess_phase_order` track unchanged this run). Phase
 0 through **4 are all complete** on `lotte.polytechnique.fr`: Phase 3's
 `reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records) and Phase
 4's `reports/phase4_summary.json` shows `verdict: COMPLETE` (`final_loss=0.717`,
@@ -15,12 +15,14 @@ until a human flips that flag. **Phase 6 (evaluation report) has also been writt
 (code-only, like Phase 5 was before it) and is `pending` -- it needs no GPU-spend
 approval of its own (it only aggregates Phase 5's already-approved-to-collect data), but
 `advance_phase_6` still blocks on cron until Phase 5 itself reaches `done`. **Phase 7
-(stretch: sep-CMA-ES pilot on `kuhn_poker`) has now also been written this session** --
-see "Cloud dev routine additions (2026-07-11c)" below -- and is `pending`, gated behind
-its own `gpu_spend_approved` flag (same reasoning as Phase 3/5's gate: a multi-day
-autonomous GPU spend, independent of Phase 5/6's blocking chain above since it's a
-different game entirely). A human reviewing `state.json` has three independent
-`gpu_spend_approved` flags to consider now (Phases 3 [already `true`], 5, and 7), not
+(stretch: sep-CMA-ES pilot on `kuhn_poker`) and Phase 8 (stretch: sep-CMA-ES on
+truncated blindfold chess) have now also been written** -- see "Cloud dev routine
+additions (2026-07-11c)"/"(2026-07-11d)" below -- and are both `pending`, each gated
+behind its own `gpu_spend_approved` flag (same reasoning as Phase 3/5's gate: a
+multi-day autonomous GPU spend). Phase 8 additionally loads the same worker pool Phase
+0.5's floor check flagged `REVIEW_NEEDED`, unlike Phase 7's kuhn_poker pilot which is
+worker-pool-independent. A human reviewing `state.json` now has **four** independent
+`gpu_spend_approved` flags to consider (Phases 3 [already `true`], 5, 7, and 8), not
 just one. See `PLAN.md` for the full approved plan this implements.
 
 ## What's actually done
@@ -484,6 +486,125 @@ resuming unattended without an equivalent check-in.
     `REVIEW_NEEDED` verdict (`kuhn_poker` doesn't touch chess skill at all), but still a
     multi-day autonomous GPU spend a human should sign off on first, same reasoning as
     Phase 3/5's gate.
+
+## Cloud dev routine additions (2026-07-11d)
+
+- **Phase 8 (stretch: sep-CMA-ES on truncated blindfold chess) -- code written, status
+  `pending` in `state.json`, gated behind `gpu_spend_approved` (same pattern as Phase
+  3/5/7).** `state.json`'s `phase_order` had every phase through `7` at `done`/`pending`
+  and phases `8`/`9` at `not_started` -- per this session's instructions, phase `8` is
+  the first `not_started` entry in that list, so this is what got built.
+
+  PLAN.md's phase table: "CMA-ES on truncated blindfold chess | open-ended, explicitly
+  under-converged". This is the "spend chess GPU-hours on it" step PLAN.md's training
+  recipe deferred until Phase 7 proved the sep-CMA-ES mechanism end-to-end against cheap
+  `kuhn_poker` reward -- Phase 8 reuses `open_fugu.train.train_cmaes.run_cmaes`
+  **verbatim** (zero changes needed -- it already accepts any scalar-returning
+  `fitness_fn`) and swaps in real truncated blindfold-chess rollouts as that fitness
+  function's game.
+
+  - `src/open_fugu/train/rollout_chess.py` (new) -- the chess-specific fitness-function
+    machinery, split pure/GPU the same way every earlier `train/*.py` module is:
+    - `blend_reward(outcome, mean_cpl, acpl_scale=100.0, outcome_weight=0.7)` (pure) --
+      PLAN.md: "reward blending win/loss/draw with graded -ACPL". Truncated games (short
+      `max_plies`, the whole point of "truncated" in this phase's name -- keeps one
+      rollout's real 7-8B-model generation cost bounded) rarely reach a decisive result,
+      so most games end `"unresolved"` (ply cap hit) with outcome-reward 0 -- alone, that
+      would give CMA-ES almost no gradient across a whole generation's rollout batch.
+      Blending in graded `-ACPL` (clamped to `[-1, 0]` via `acpl_scale` so one blundered
+      queen doesn't dwarf everything else) gives a continuous signal even when nothing
+      finishes decisively. `mean_centipawn_loss()` reuses the same "mean of what's
+      legal-and-scored" discipline `aggregate_metrics.py` already established; outcome
+      bucketing reuses `eval.aggregate_metrics.game_outcome()` directly (no
+      reimplementation) via a `{"result": ..., "llm_color": ...}` dict built from
+      `harness.GameResult`.
+    - `RoutingHistoryTracker` (pure) -- reconstructs the Fugu backbone's routing prompt
+      from the FULL message transcript `harness.play_blindfold_vs_engine`'s `move_fn`
+      callback already receives on every call. Deliberately a **separate, small**
+      implementation from `a2a/orchestrator_agent.py`'s `FuguSelectionDispatch` (not an
+      import/reuse of it): that class accumulates state incrementally across A2A calls
+      because it only ever sees one turn's delta text over the wire and is tightly
+      coupled to `ToolProvider`/async event-queue plumbing this synchronous in-process
+      rollout has no use for; untangling that coupling to share code was judged out of
+      scope for a phase this sandbox cannot GPU-test end-to-end against the real thing.
+      Uses the exact same `parse_orchestrator_turn`/`format_opening_prompt`/`UCI_RE`
+      building blocks `FuguSelectionDispatch` uses, so the routing *prompt* a CMA-ES
+      candidate is evaluated against matches production exactly, even though the
+      bookkeeping differs.
+    - `make_dispatch_move_fn(backbone, worker_pool)` (needs `torch`) -- a synchronous
+      `harness.MoveFn`: reconstructs the routing prompt, runs
+      `backbone.forward()` under `torch.no_grad()`, argmaxes to pick one
+      `models.local_worker.LocalWorker` from `worker_pool`, and calls that worker's
+      `generate()` with a **fresh** single-turn message built from the reconstructed
+      prompt -- same "stateless, full-history-every-call" design
+      `FuguSelectionDispatch` uses for real A2A dispatch, deliberately **in-process**
+      rather than over A2A: CMA-ES needs far more rollouts per generation
+      (`popsize x n_games_per_eval`) than any one Phase 5 A2A condition plays, and
+      Phase 5's per-condition subprocess-spin-up-plus-HTTP-readiness cost
+      (`eval/run_eval_matches.py`) is fine for one 25-game condition but far too slow to
+      pay per CMA-ES candidate -- Phase 7's `gtbench_ext/orchestrator_router_model.py`
+      made the identical in-process choice for the same reason.
+    - `play_one_rollout(...)` -- wraps one `harness.play_blindfold_vs_engine` call
+      (opponent = the same `StockfishScorer` used for both the engine's own moves and
+      the LLM's centipawn-loss grading, following Phase 0.5's "very weak fixed opponent"
+      convention) and returns a `RolloutOutcome` (`game_result`/`outcome`/
+      `mean_centipawn_loss`/`reward`).
+  - `scripts/phase8_cmaes_chess_pilot.py` (new) -- the pilot itself, structurally mirrors
+    `phase7_cmaes_kuhn_pilot.py`: builds a real `OrchestratorBackbone` + the same
+    3-worker pool Phase 0.5/3/4/5 use (`qwen2.5-7b`/`mistral-7b`/
+    `deepseek-r1-distill-qwen-7b`), evolves the selection head's **weight+bias only**
+    (SVF's `z` vectors stay frozen at their no-op default -- same scoping decision Phase
+    7 made and flagged as open for this phase; widening to include `z` for full parity
+    with SFT's `trainable_parameters()` is left as future work), against truncated
+    (`--max-plies`, default `16`) blindfold games with the Ruy Lopez opening (same as
+    Phase 0.5/1/5). Deliberately modest defaults (`n_generations=6`, `popsize=4`,
+    `n_games_per_eval=4`) given real per-ply 7-8B-model generation cost, per rollout, per
+    candidate, per generation adds up fast -- PLAN.md's own estimate for this phase is
+    "open-ended, explicitly under-converged", so `write_summary()`'s `note` field says so
+    explicitly rather than implying a converged result. Writes
+    `reports/phase8_summary.json` (history + held-out final eval vs. the same weak-skill
+    Stockfish opponent) and a checkpoint to
+    `checkpoints/phase8_cmaes_chess/selection_head.pt`. Idempotent (skips if
+    `reports/phase8_summary.json` already shows `verdict: COMPLETE`).
+  - `advance_phase_8` added to `scripts/orchestrate.py` + registered in
+    `PHASE_ADVANCERS`, following `advance_phase_7`'s summary-file + tmux +
+    `gpu_spend_approved` pattern exactly.
+  - **Verified well beyond a bare `py_compile` check** (this sandbox has outbound
+    network access but no GPU/Stockfish/downloaded models): installed `python-chess` +
+    `numpy` + `cma` into a throwaway venv and:
+    1. Unit-tested `blend_reward`/`mean_centipawn_loss`/`RoutingHistoryTracker` against
+       hand-constructed cases (white's opening turn, black's opening turn with the
+       engine's first reply folded in, a plain mid-game delta turn, and a hyphenated
+       LLM move normalizing correctly -- the same four cases Phase 5's own
+       `parse_orchestrator_turn` tests already covered, re-run here against
+       `RoutingHistoryTracker`'s different accumulation strategy) -- all pass.
+    2. Ran the **real** `harness.play_blindfold_vs_engine` game loop end-to-end through
+       `make_dispatch_move_fn`, using a fake `torch` (numpy-backed `no_grad`/`argmax`/
+       `as_tensor`, mirroring how Phase 7's own write-up verified
+       `OrchestratorRouterModel` the same way) plus scripted fake workers and a fake
+       Stockfish-shaped scorer (real `chess.Board` legality, canned centipawn losses --
+       no real Stockfish binary needed to exercise this) -- confirmed legal-move
+       scoring, immediate illegal-move termination (`loss`, reward `-1.0`, `score_move`
+       never called on it), White/Black opening-turn handling (including the engine's
+       folded first reply on Black games reaching the routing prompt correctly), and
+       that dispatch is genuinely stateless (each worker call gets a fresh single-turn
+       message, never the full running transcript).
+    3. Ran `phase8_cmaes_chess_pilot.py`'s `make_fitness_fn`/`final_eval` against a fake
+       selection head whose weight/bias **actually drive routing** through a real linear
+       computation (not a hardcoded stub) -- confirmed different candidate parameter
+       vectors genuinely route to different workers (not just that the plumbing runs
+       without crashing), and that `final_eval`'s win/loss/draw/unresolved rates sum to
+       `1.0`.
+  - **Only genuinely unverifiable-from-here pieces**: real `torch`/GPU tensor-op
+    correctness and actual worker-LLM inference quality (already exercised by Phase
+    3-5/7, not re-verified here), and real Stockfish scoring (`StockfishScorer` itself
+    already gated by Phase 2's sanity check). `gpu_spend_approved` defaults to `false` --
+    unlike Phase 7's `kuhn_poker` pilot (worker-pool-independent), Phase 8 loads the
+    **same worker pool Phase 0.5's floor check flagged `REVIEW_NEEDED`** to actually play
+    real blindfold chess, so a human should look at both `reports/phase0_5_summary.json`
+    and `reports/phase7_summary.json` (confirms the CMA-ES mechanism itself already
+    works end-to-end) before flipping `state.json`'s `phases["8"].gpu_spend_approved` to
+    `true`.
 
 ## Cloud dev routine additions (2026-07-10)
 

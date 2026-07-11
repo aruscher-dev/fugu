@@ -508,6 +508,63 @@ def advance_phase_7(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_8(state: dict) -> str:
+    """Phase 8 (stretch): sep-CMA-ES on truncated blindfold chess (PLAN.md
+    phase table: "CMA-ES on truncated blindfold chess | open-ended,
+    explicitly under-converged"). Evolves the Fugu orchestrator's selection
+    head against real end-to-end truncated blindfold-game reward (blended
+    win/loss/draw + graded -ACPL, open_fugu.train.rollout_chess.blend_reward)
+    via the same open_fugu.train.train_cmaes.run_cmaes Phase 7 already
+    validated against real kuhn_poker reward -- this is the "spend chess
+    GPU-hours on it" step PLAN.md's training recipe deferred until Phase 7's
+    mechanics were proven. Follows advance_phase_3/5/7's summary-file + tmux
+    + gpu_spend_approved pattern (not advance_phase_0_5/m2's per-worker one).
+
+    Gated the same way Phase 3/5/7 are (phases["8"].gpu_spend_approved ==
+    true) -- unlike Phase 7's kuhn_poker pilot, this ALSO loads the same
+    worker pool Phase 0.5's floor check flagged REVIEW_NEEDED (0%/44%/22%
+    legal-move rate) to actually play real blindfold chess, so a human
+    reviewing this flag should look at both reports/phase0_5_summary.json
+    and reports/phase7_summary.json (confirms the CMA-ES mechanism itself
+    works) before approving. PLAN.md's own estimate is "open-ended,
+    explicitly under-converged" -- i.e. even a full run is expected to be a
+    scoped proof-of-concept, not a finished result, same as Phase 7's
+    kuhn_poker pilot but for real 7-8B-model blindfold-chess generation
+    (considerably more expensive per rollout than poker's few-token action
+    space)."""
+    summary_path = REPORTS_DIR / "phase8_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}8_cmaes_chess"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 8 CMA-ES truncated-blindfold-chess pilot still running in tmux session '{session}'")
+        return "in_progress"
+
+    if not state["phases"].get("8", {}).get("gpu_spend_approved"):
+        print("[orchestrate] phase 8 BLOCKED pending human sign-off: this is a stretch-goal CMA-ES "
+              "pilot against real blindfold chess (PLAN.md estimate: 'open-ended, explicitly "
+              "under-converged'), loading the same worker pool Phase 0.5's floor check flagged "
+              "REVIEW_NEEDED. Set phases[\"8\"].gpu_spend_approved = true in state.json once reviewed "
+              "(see STATUS.md) to let this launch.")
+        return "blocked"
+
+    # Not running and not complete, and human-approved -- (re)launch. The
+    # underlying script is idempotent (checks reports/phase8_summary.json's
+    # own verdict before doing any work, see its main()), same
+    # not-meaningfully-resumable-mid-run reasoning as advance_phase_7.
+    log_path = LOG_DIR / "phase8_cmaes_chess_pilot.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/phase8_cmaes_chess_pilot.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
@@ -518,6 +575,7 @@ PHASE_ADVANCERS = {
     "5": advance_phase_5,
     "6": advance_phase_6,
     "7": advance_phase_7,
+    "8": advance_phase_8,
 }
 
 
