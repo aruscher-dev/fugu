@@ -1,7 +1,7 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 6, see "Cloud dev routine
-additions (2026-07-11b)" below; `minichess_phase_order` track unchanged this run). Phase
+Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 7, see "Cloud dev routine
+additions (2026-07-11c)" below; `minichess_phase_order` track unchanged this run). Phase
 0 through **4 are all complete** on `lotte.polytechnique.fr`: Phase 3's
 `reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records) and Phase
 4's `reports/phase4_summary.json` shows `verdict: COMPLETE` (`final_loss=0.717`,
@@ -11,11 +11,17 @@ Open-Fugu blindfold matches) is written and `pending`**, gated behind an explici
 `gpu_spend_approved` human sign-off (see "Cloud dev routine additions (2026-07-11)"
 below for why) before the GPU host's cron will actually launch it -- **still the
 blocking step**, nothing downstream (including Phase 6, below) can produce real numbers
-until a human flips that flag. **Phase 6 (evaluation report) has also been written this
-session** (code-only, like Phase 5 was before it) and is `pending` -- it needs no
-GPU-spend approval of its own (it only aggregates Phase 5's already-approved-to-collect
-data), but `advance_phase_6` still blocks on cron until Phase 5 itself reaches `done`.
-See `PLAN.md` for the full approved plan this implements.
+until a human flips that flag. **Phase 6 (evaluation report) has also been written**
+(code-only, like Phase 5 was before it) and is `pending` -- it needs no GPU-spend
+approval of its own (it only aggregates Phase 5's already-approved-to-collect data), but
+`advance_phase_6` still blocks on cron until Phase 5 itself reaches `done`. **Phase 7
+(stretch: sep-CMA-ES pilot on `kuhn_poker`) has now also been written this session** --
+see "Cloud dev routine additions (2026-07-11c)" below -- and is `pending`, gated behind
+its own `gpu_spend_approved` flag (same reasoning as Phase 3/5's gate: a multi-day
+autonomous GPU spend, independent of Phase 5/6's blocking chain above since it's a
+different game entirely). A human reviewing `state.json` has three independent
+`gpu_spend_approved` flags to consider now (Phases 3 [already `true`], 5, and 7), not
+just one. See `PLAN.md` for the full approved plan this implements.
 
 ## What's actually done
 
@@ -331,6 +337,154 @@ resuming unattended without an equivalent check-in.
     by hand before that (useful for a human who wants to peek at partial numbers
     mid-Phase-5 without the orchestrator mistaking that peek for "Phase 6 done").
 
+## Cloud dev routine additions (2026-07-11c)
+
+- **Phase 7 (stretch: sep-CMA-ES pilot on `kuhn_poker`) -- code written, status `pending`
+  in `state.json`, gated behind `gpu_spend_approved` (same pattern as Phase 3/5).**
+  `state.json`'s `phase_order` had every phase through `6` at `done`/`pending` and every
+  stretch phase (`7`/`8`/`9`) at `not_started` -- per this session's instructions, phase
+  `7` is the first `not_started` entry in that list, so this is what got built (the
+  `minichess_phase_order` track's `m3` is also `not_started`, but that's a separate list
+  this session's instructions don't target, and STATUS.md's own "Exact next steps" #4
+  already flags that track's `m2` result -- `REVIEW_NEEDED`, 0% legal-move rate -- as
+  needing a human look before `m3` gets built anyway).
+
+  PLAN.md's training recipe step 2: "sep-CMA-ES to directly maximize end-to-end task
+  reward... Validate the loop first on `gtbench`'s cheap `kuhn_poker` before spending
+  chess GPU-hours on it." This phase is exactly that validation: evolve the Fugu
+  orchestrator's selection head against real end-to-end `kuhn_poker` game reward
+  (win/loss/draw vs. a fixed baseline), via the same per-query-routing design Phase 4/5
+  use for chess, proving the whole CMA-ES mechanism works end-to-end before Phase 8
+  spends real chess GPU-hours on it. Per PLAN.md's Verification section ("Any CMA-ES
+  results (stretch phases) are explicitly reported as scoped proof-of-concept"), this is
+  explicitly NOT a poker-strength or chess-quality claim.
+
+  **Verified far more thoroughly than a typical GPU-blocked phase**, because this cloud
+  sandbox turned out to have outbound network access (confirmed by testing `git clone`
+  directly, not assumed) -- so rather than stopping at `py_compile`, this session actually
+  cloned the real upstream (`jinhaoduan/GTBench`, the `gtbench` harness PLAN.md's Context
+  section names) into a throwaway sandbox venv, installed `pyspiel`/`python-box`/`cma`/
+  `numpy` (none of which need a GPU), and exercised the REAL `gamingbench` game loop
+  end-to-end with mock LLM models standing in for the real GPU-backed ones -- see below
+  for exactly what that caught.
+
+  - `src/open_fugu/train/train_cmaes.py` (new) -- generic sep-CMA-ES trainer, reusable by
+    Phase 8 later: `flatten_params`/`unflatten_params` (a selection head's `weight`/`bias`
+    tensors <-> one flat vector) and `run_cmaes` (wraps `cma.CMAEvolutionStrategy` with
+    `CMA_diagonal: True` -- the "sep" in "sep-CMA-ES" -- ask/tell loop over a
+    caller-supplied `fitness_fn`). Pure numpy, zero torch/gtbench dependency, split out
+    the same way `train_sft.py` splits its pure-data-munging half from its
+    GPU-needing `train()` -- and actually verified in the sandbox: round-tripped
+    flatten/unflatten, and ran `run_cmaes` against a toy negated-sphere `fitness_fn` (a
+    real `cma` install, 25 generations, popsize 8) -- confirmed it actually converges
+    toward the known optimum (final distance ~0.02 from a target 4 units away at init),
+    not just that it runs without crashing.
+  - `src/open_fugu/gtbench_ext/local_transformers_model.py` (new) -- a
+    `gamingbench.models.base_model.BaseModel`-shaped wrapper (same constructor fields,
+    same `query(messages, n, stop, prompt_type) -> (generations, completion_tokens,
+    prompt_tokens)` return shape) around `models/local_worker.py`'s `LocalWorker`, so a
+    real local open-weight model can play a `gtbench` game -- GTBench's own `LLMModel`
+    (confirmed by reading `gamingbench/models/llm_model.py` directly) only supports
+    remote OpenAI/Anyscale/DeepInfra APIs, no local-inference path exists upstream.
+    Duck-types rather than subclasses `BaseModel` so this file stays importable even when
+    `vendor/gtbench` isn't cloned yet.
+  - `src/open_fugu/gtbench_ext/orchestrator_router_model.py` (new) -- the other
+    `BaseModel`-shaped wrapper: on every `query()`, runs `OrchestratorBackbone.forward()`
+    (real per-query dispatch, `torch.no_grad()` + argmax over the routing logits --
+    literally the same design `a2a/orchestrator_agent.py`'s `FuguSelectionDispatch` uses
+    for chess, confirmed by reading that class directly rather than reimplementing from
+    memory) to pick one worker from a fixed pool, then delegates the actual generation to
+    that worker's `LocalTransformersModel`. This is the class whose
+    `backbone.selection_head` weight+bias IS the flat parameter vector
+    `phase7_cmaes_kuhn_pilot.py`'s CMA-ES loop evolves.
+  - **Verified against the real GTBench source, not guessed** -- cloned
+    `jinhaoduan/GTBench` into the sandbox and read `gamingbench/models/base_model.py`,
+    `llm_model.py`, `agents/base_agent.py`, `agents/prompt_agent.py`,
+    `agents/random_agent.py`, `games/openspiel_adapter.py`, `games/kuhn_poker.py`,
+    `utils/utils.py`, and `utils/history_tracker.py` directly (not from training-data
+    memory or a web-search summary, which kept coming back too vague to code against --
+    `WebFetch`'s summarizing pass lost exact class/method names every time; `git clone`
+    into the sandbox and reading the real files directly is what actually worked). Then
+    ran the real loop with mocks:
+    1. A full `KuhnPoker().play([agent0, agent1], [model0, model1], tracker)` with two
+       `RandomAgent`s (no LLM needed) -- confirmed match status/winner-naming
+       (`f"{agent_name}_{model.nick_name}"`)/`winner_score`/`loser_score` all come back as
+       this session's `play_one_match()` reward-extraction logic assumes.
+    2. The same, but with a `PromptAgent` driven by a fake model whose `query()` returns a
+       canned string embedded in a longer sentence ("I choose to play `<Bet>` this turn.")
+       -- confirmed `PromptAgent`'s regex parsing extracts the move correctly and the
+       `model.query(messages, n, stop, prompt_type) -> (generations, completion_tokens,
+       prompt_tokens)` contract `LocalTransformersModel`/`OrchestratorRouterModel`
+       implement is exactly right.
+    3. A minimal fake `torch` module (numpy-backed, just enough surface --
+       `no_grad`/`as_tensor`/`argmax`/`Tensor.copy_`) swapped into `sys.modules['torch']`
+       to exercise `OrchestratorRouterModel.query()`'s real code path against a fake
+       backbone with a hand-picked weight matrix -- confirmed it routes to the correct
+       worker (argmax over the real logits computation) and that
+       `phase7_cmaes_kuhn_pilot.py`'s `play_one_match`/`make_fitness_fn`/`final_eval`
+       glue all produce valid rewards end-to-end (fitness values in `[-1, 1]`, held-out
+       win/loss/draw rates summing to 1).
+    4. **Found and fixed a real upstream landmine this way, not a guess**:
+       `gamingbench/games/__init__.py` eagerly imports every game module (not just
+       `kuhn_poker`), which chains through `utils/utils.py` -> `models/__init__.py` ->
+       `models/base_model.py` -> `chat/chat.py`, which does a bare, unconditional
+       `from langchain.chat_models import ChatOpenAI, ChatAnyscale` at module scope.
+       Installing real `langchain`/`langchain-community` (GTBench's `requirements.txt`
+       pins a Feb-2024-era version) risks pydantic-version conflicts with this project's
+       already-validated torch/transformers/a2a-sdk stack (see Phase 0's pinning notes)
+       -- for a code path (`chat_llm()`) this project's `gtbench_ext/` never actually
+       calls. `src/open_fugu/gtbench_ext/_langchain_stub/` provides minimal same-named
+       stub modules for exactly the handful of symbols `chat.py` imports (every stubbed
+       class raises `NotImplementedError` if anyone ever tries to actually instantiate
+       one) -- confirmed this makes `from gamingbench.games.kuhn_poker import KuhnPoker`
+       import cleanly in a venv with no real `langchain` installed at all.
+       `phase7_setup_gtbench.sh` therefore deliberately does NOT `pip install -r
+       vendor/gtbench/requirements.txt`, only the two packages `gtbench_ext/` actually
+       imports (`pyspiel`/`python-box`).
+    5. Also hit (and fixed) `gamingbench.utils.utils.LLMBenchLogger`'s singleton
+       behavior: its first construction anywhere in the process must be given a real log
+       path (`logging.FileHandler(None)` crashes), but every `KuhnPoker`/`BaseAgent`
+       construction internally calls `LLMBenchLogger(None)` -- `_import_gtbench()`
+       explicitly constructs it with a real path first, before touching any game/agent
+       class, so those internal `None` calls just reuse the already-configured
+       singleton.
+  - `scripts/phase7_setup_gtbench.sh` (new) -- idempotent: clones `vendor/gtbench`
+    (gitignored, own git history, re-clonable, same pattern as Phase 0's
+    `vendor/llm_chess`) if missing, installs `pyspiel`/`python-box` via `uv pip install
+    --python $VENV_PYTHON` (this project's established convention, not raw `pip` -- see
+    m0's script for why) if missing, then verifies both a bare `pyspiel.load_game
+    ('kuhn_poker')` and `gamingbench.games.kuhn_poker.KuhnPoker()` import/construct
+    correctly before declaring success.
+  - `scripts/phase7_cmaes_kuhn_pilot.py` (new) -- the pilot itself. Builds a small
+    (default 2-worker) `LocalTransformersModel` pool + a fresh `OrchestratorBackbone`
+    (`apply_svf` still applied for architecture parity with Phase 4/5, but `z` stays
+    frozen at its no-op default -- see the script's own docstring for why CMA-ES here
+    only evolves the selection head's weight+bias, not SVF's `z` too) +
+    `OrchestratorRouterModel`, a `PromptAgent` (router) vs. `gtbench`'s own `RandomAgent`
+    (fixed baseline, no LLM cost), alternates which seat the router plays across games to
+    dilute first-player advantage, and runs `run_cmaes` with a fitness function that
+    loads each CMA-ES candidate into `selection_head`, plays `n_games_per_eval` real
+    matches, and returns mean reward (+1 win / -1 loss-or-illegal-move / 0 draw). Writes
+    `reports/phase7_summary.json` (history + a held-out final win-rate-vs-random eval on
+    the best-found parameters) and a checkpoint to
+    `checkpoints/phase7_cmaes_kuhn/selection_head.pt`. Idempotent (skips if
+    `reports/phase7_summary.json` already shows `verdict: COMPLETE`).
+  - `advance_phase_7` added to `scripts/orchestrate.py` + registered in
+    `PHASE_ADVANCERS`, following Phase 3/5's summary-file + tmux + `gpu_spend_approved`
+    pattern (not Phase 0.5/m2's per-worker one) -- dry-run verified (mocked
+    `tmux_session_exists`/`tmux_launch`, real gate logic) for all four states: blocked
+    (not approved), launches correctly once approved, stays `in_progress` without
+    relaunching while its tmux session is already up, and returns `done` once
+    `reports/phase7_summary.json` shows `verdict: COMPLETE`.
+  - **Only genuinely unverifiable-from-here pieces**: real `torch`/GPU tensor op
+    correctness (the fake-`torch` shim proves the control flow, not real CUDA numerics)
+    and actual worker-LLM inference quality (`models/local_worker.py`, already exercised
+    by Phase 3-5, not re-verified here). `gpu_spend_approved` defaults to `false`
+    (PLAN.md's own estimate: "2-5 days") -- independent of Phase 0.5's chess-quality
+    `REVIEW_NEEDED` verdict (`kuhn_poker` doesn't touch chess skill at all), but still a
+    multi-day autonomous GPU spend a human should sign off on first, same reasoning as
+    Phase 3/5's gate.
+
 ## Cloud dev routine additions (2026-07-10)
 
 - **Phase 4 (SVF + selection head implementation, SFT training) -- code written, status
@@ -618,6 +772,15 @@ to re-verify anywhere, but `m2` onward needs real worker inference.
    rate for all 3 default workers on 5x5, worse than full chess) -- a human should look
    at this before m3 (A2A wiring) is built against this worker pool on the minichess
    track, same spirit as Phase 0.5's gate. `m3` onward is still `not_started`.
+4b. **Phase 7 (stretch: sep-CMA-ES pilot on `kuhn_poker`) -- DONE writing, `pending`
+    execution**, gated behind `phases["7"].gpu_spend_approved` (defaults `false`, same
+    pattern as Phase 3/5 -- see "Cloud dev routine additions (2026-07-11c)" above for the
+    full writeup, including how thoroughly this got verified against the real upstream
+    `gtbench` source despite having no GPU here). A human should flip that flag once
+    ready to spend the ~2-5 days of GPU-hours PLAN.md estimates for this pilot --
+    independent of Phase 5/6's own approval chain above (different game, no shared
+    dependency), so this can launch whenever, in whatever order a human prefers relative
+    to Phase 5.
 5. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
    `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up --
    current numbers (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`); this

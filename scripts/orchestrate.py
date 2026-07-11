@@ -452,6 +452,62 @@ def advance_phase_6(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_7(state: dict) -> str:
+    """Phase 7 (stretch): sep-CMA-ES pilot on gtbench's kuhn_poker (PLAN.md
+    training recipe step 2: "Validate the loop first on gtbench's cheap
+    kuhn_poker before spending chess GPU-hours on it"). Evolves the Fugu
+    orchestrator's selection head directly against real end-to-end game
+    reward (win/loss/draw vs. a fixed RandomAgent baseline) via
+    open_fugu.train.train_cmaes.run_cmaes -- validates the whole CMA-ES
+    mechanism end-to-end before Phase 8 spends real chess GPU-hours on the
+    same loop. Independent of the main chess track's worker pool/checkpoints
+    (different game, own fresh orchestrator backbone) -- follows
+    advance_phase_3/5's summary-file + tmux pattern, not advance_phase_0_5/m2's
+    per-worker one.
+
+    Gated the same way Phase 3/5 are (phases["7"].gpu_spend_approved ==
+    true) even though it's independent of Phase 0.5's chess-quality verdict
+    -- PLAN.md's own estimate is "2-5 days" of real GPU-hours, spent
+    autonomously across many CMA-ES generations, which is exactly the kind
+    of nontrivial autonomous spend this project's convention (Phase 3/5)
+    requires an explicit human sign-off for before a cron tick will launch
+    it. A human should set that flag in state.json once ready -- see
+    STATUS.md."""
+    summary_path = REPORTS_DIR / "phase7_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}7_cmaes_kuhn"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 7 CMA-ES kuhn_poker pilot still running in tmux session '{session}'")
+        return "in_progress"
+
+    if not state["phases"].get("7", {}).get("gpu_spend_approved"):
+        print("[orchestrate] phase 7 BLOCKED pending human sign-off: this is a stretch-goal CMA-ES "
+              "pilot (PLAN.md estimate: 2-5 days of real GPU-hours across many generations). Set "
+              "phases[\"7\"].gpu_spend_approved = true in state.json once reviewed (see STATUS.md) "
+              "to let this launch.")
+        return "blocked"
+
+    # Not running and not complete, and human-approved -- (re)launch. The
+    # underlying script is idempotent (checks reports/phase7_summary.json's
+    # own verdict before doing any work, see its main()), so a
+    # crash-and-cron-relaunch just re-runs cleanly rather than resuming
+    # mid-CMA-ES-run (unlike Phase 3's per-position resumability, a partial
+    # CMA-ES run isn't meaningfully resumable -- the ask/tell state lives
+    # only in that one process).
+    log_path = LOG_DIR / "phase7_cmaes_kuhn_pilot.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/phase7_cmaes_kuhn_pilot.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
@@ -461,6 +517,7 @@ PHASE_ADVANCERS = {
     "4": advance_phase_4,
     "5": advance_phase_5,
     "6": advance_phase_6,
+    "7": advance_phase_7,
 }
 
 
