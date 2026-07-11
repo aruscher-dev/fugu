@@ -403,6 +403,55 @@ def advance_phase_5(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_6(state: dict) -> str:
+    """Phase 6: evaluation report (PLAN.md phase table: "ACPL, blunder rate,
+    win-rate, illegal-move rate"). Pure aggregation over Phase 5's raw
+    per-condition game records (logs/phase5_matches/<condition>.json,
+    written by scripts/phase5_baseline_and_fugu_matches.py) -- no GPU/model
+    access needed, so unlike Phase 3/5 this carries no gpu_spend_approved
+    gate: it only reads data a human already approved collecting, same
+    reasoning as Phase 4's own gate-free status. Runs synchronously (no
+    tmux), like advance_m0/m1's fast CPU-only checks -- aggregating a few
+    hundred already-written JSON game records is not a long-running job.
+
+    Blocks until Phase 5 itself is fully done (state.json phase "5" ==
+    "done", i.e. reports/phase5_summary.json's own verdict is COMPLETE) --
+    a report built from an in-progress Phase 5 run would be a misleading
+    final deliverable, even though scripts/phase6_eval_report.py itself is
+    capable of writing a PARTIAL one (see its own verdict handling) if
+    invoked manually before that."""
+    report_path = REPORTS_DIR / "phase6_eval_report.json"
+    if report_path.exists():
+        report = json.loads(report_path.read_text())
+        if report.get("verdict") == "COMPLETE":
+            return "done"
+
+    if state["phases"].get("5", {}).get("status") != "done":
+        print("[orchestrate] phase 6 waiting on Phase 5 to finish (reports/phase5_summary.json "
+              "not yet verdict=COMPLETE) -- an evaluation report over partial match data would "
+              "be a misleading final deliverable.")
+        return "blocked"
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.chmod(0o700)
+    log_path = LOG_DIR / "phase6_eval_report.log"
+    result = subprocess.run(
+        [VENV_PYTHON, str(PROJECT_DIR / "scripts" / "phase6_eval_report.py")],
+        cwd=PROJECT_DIR, capture_output=True, text=True,
+    )
+    log_path.write_text(result.stdout + result.stderr)
+    log_path.chmod(0o600)
+    if result.returncode != 0:
+        print(f"[orchestrate] phase 6 report generation failed (see {log_path})")
+        return "blocked"
+
+    report = json.loads(report_path.read_text()) if report_path.exists() else {}
+    if report.get("verdict") == "COMPLETE":
+        return "done"
+    print(f"[orchestrate] phase 6 report verdict='{report.get('verdict')}' (not COMPLETE yet)")
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
@@ -411,6 +460,7 @@ PHASE_ADVANCERS = {
     "3": advance_phase_3,
     "4": advance_phase_4,
     "5": advance_phase_5,
+    "6": advance_phase_6,
 }
 
 

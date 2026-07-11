@@ -31,8 +31,8 @@
       "note": "Baseline + Open-Fugu blindfold matches (5 conditions x ~25 games: 3 solo-worker baselines, Phase 1's random-routing orchestrator, Phase 5's own per-query Open-Fugu SFT-routed orchestrator using Phase 4's checkpoint). Code written (src/open_fugu/eval/run_eval_matches.py, scripts/phase5_baseline_and_fugu_matches.py, plus a2a/orchestrator_agent.py's new FuguSelectionDispatch -- the real per-query routing this project's docs had flagged as still open) and registered as advance_phase_5 in orchestrate.py. gpu_spend_approved is false (unlike Phase 3's, which was retroactively set true because a human had already engaged with that exact run before the gate existed) -- no equivalent human engagement exists yet for Phase 5, and it spends real GPU-hours (~25hr est.) against both Phase 0.5's REVIEW_NEEDED floor check and Phase 4's not-yet-sanity-checked checkpoint. A human should review both, then flip this to true. See STATUS.md."
     },
     "6": {
-      "status": "not_started",
-      "note": "evaluation report"
+      "status": "pending",
+      "note": "evaluation report -- code written (src/open_fugu/eval/aggregate_metrics.py + scripts/phase6_eval_report.py), registered as advance_phase_6 in orchestrate.py. Pure aggregation over Phase 5's per-condition game records (logs/phase5_matches/, gitignored) into the ACPL/blunder-rate/win-rate/illegal-move-rate comparison table PLAN.md's Verification section calls for -- no GPU/model access needed, no gpu_spend_approved gate (same reasoning as Phase 4's gate-free status: it only reads already-approved data). Runs synchronously (no tmux) once Phase 5 itself is 'done'. Does NOT compute a live majority-vote condition -- Phase 5 doesn't play one, and it can't be reconstructed after the fact from the 3 solo conditions' games (their move sequences diverge from ply 1 onward); reported as an explicit null with a note rather than faked. See STATUS.md."
     },
     "7": {
       "status": "not_started",

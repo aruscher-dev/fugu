@@ -1,16 +1,20 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 5, see "Cloud dev routine
-additions (2026-07-11)" below; `minichess_phase_order` track unchanged this run). Phase
+Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 6, see "Cloud dev routine
+additions (2026-07-11b)" below; `minichess_phase_order` track unchanged this run). Phase
 0 through **4 are all complete** on `lotte.polytechnique.fr`: Phase 3's
 `reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records) and Phase
 4's `reports/phase4_summary.json` shows `verdict: COMPLETE` (`final_loss=0.717`,
 `mean_loss_last_50=1.711`, checkpoint at `checkpoints/phase4_sft/backbone_head_svf.pt`
 on that host -- gitignored, doesn't travel with the repo). **Phase 5 (baseline +
-Open-Fugu blindfold matches) has been written this session and is now `pending`**,
-gated behind an explicit `gpu_spend_approved` human sign-off (see "Cloud dev routine
-additions (2026-07-11)" below for why) before the GPU host's cron will actually launch
-it.
+Open-Fugu blindfold matches) is written and `pending`**, gated behind an explicit
+`gpu_spend_approved` human sign-off (see "Cloud dev routine additions (2026-07-11)"
+below for why) before the GPU host's cron will actually launch it -- **still the
+blocking step**, nothing downstream (including Phase 6, below) can produce real numbers
+until a human flips that flag. **Phase 6 (evaluation report) has also been written this
+session** (code-only, like Phase 5 was before it) and is `pending` -- it needs no
+GPU-spend approval of its own (it only aggregates Phase 5's already-approved-to-collect
+data), but `advance_phase_6` still blocks on cron until Phase 5 itself reaches `done`.
 See `PLAN.md` for the full approved plan this implements.
 
 ## What's actually done
@@ -244,6 +248,88 @@ resuming unattended without an equivalent check-in.
     `reports/phase0_5_summary.json` and `reports/phase4_summary.json`, then flip
     `state.json`'s `phases["5"].gpu_spend_approved` to `true` to let the GPU host's cron
     launch this.
+
+## Cloud dev routine additions (2026-07-11b)
+
+- **Phase 6 (evaluation report) -- code written, status `pending` in `state.json`, no
+  extra approval gate.** Per PLAN.md's phase table: "Evaluation report: ACPL, blunder
+  rate, win-rate, illegal-move rate." Written by the cloud dev routine (no GPU/A2A
+  runtime access there, and Phase 5 hasn't actually run yet either -- no real match data
+  exists anywhere yet to report on) -- verification limited to `python3 -m py_compile`
+  on both new files, plus pure-logic unit tests against hand-constructed per-game dicts
+  shaped exactly like `chess_green_agent.py`'s real `EvalResult` output (`result`/
+  `llm_color`/`termination`/`legal_move_rate`/`mean_acpl`/`blunder_rate`), and a
+  full run of `scripts/phase6_eval_report.py` itself against fake
+  `logs/phase5_matches/*.json` files in a throwaway sandbox copy of the repo (exercised
+  all four reachable states: no `reports/phase5_summary.json` yet, that file present but
+  no per-condition files yet, one condition present with Phase 5 still `IN_PROGRESS`
+  (verdict `PARTIAL`), and Phase 5 `COMPLETE` (verdict `COMPLETE`) -- confirmed both the
+  JSON and Markdown outputs are written correctly in each case). `advance_phase_6` also
+  dry-run verified in `orchestrate.py` (real gate logic, `VENV_PYTHON` substituted for
+  the sandbox's own interpreter since `/Data/.venv` doesn't exist here): confirmed it
+  blocks (and does NOT shell out) while `state.json`'s phase `"5"` isn't `"done"`, and
+  correctly shells out to the real script and parses its verdict once `"5"` is `"done"`.
+  **The next GPU-host cron run, once Phase 5 actually completes, is what produces the
+  first real report** -- this session could only verify the aggregation *logic*, never
+  real match data (none exists yet).
+  - `src/open_fugu/eval/aggregate_metrics.py` (new) -- pure-logic module (no torch/A2A/
+    chess import needed, since every field it reads is already a plain value in
+    `chess_green_agent.py`'s per-game summary dict). `game_outcome()` buckets one game
+    into `win`/`loss`/`draw`/`unresolved` from the LLM's perspective (`result` +
+    `llm_color`), keeping `"*"` (ply-cap reached, `termination == "max_plies"`) as its
+    own `unresolved` bucket distinct from a genuine `draw` -- it reflects the eval's ply
+    budget, not gameplay reaching an actually-drawn position. `aggregate_condition()`
+    turns one condition's list of per-game dicts into `n_games`/`mean_legal_move_rate`/
+    `mean_acpl`/`mean_blunder_rate`/`win_rate`/`draw_rate`/`loss_rate`/
+    `unresolved_rate`/`illegal_move_rate`, same "skip `None`, mean of what exists"
+    discipline `orchestrate.py`'s `write_phase0_5_summary`/`write_m2_summary` already
+    use for `mean_legal_move_rate`. `build_report()` adds one derived comparison beyond
+    the raw per-condition numbers: every non-solo condition (`random_routing`,
+    `open_fugu_sft`) gets a `vs_solo_mean` dict -- its delta against the plain average of
+    the `solo_*` baselines on `mean_acpl`/`mean_blunder_rate`/`win_rate`/
+    `illegal_move_rate` -- which is the actual comparison PLAN.md's Verification section
+    ("Open-Fugu vs. each solo worker vs. random-routing") asks for.
+    `format_markdown_table()` renders the whole report as a human-readable table (the
+    "report" a person would actually read; the JSON is its machine-readable twin).
+  - `scripts/phase6_eval_report.py` (new) -- thin CLI: reads every
+    `logs/phase5_matches/<condition>.json` file that exists (gitignored, written by
+    `scripts/phase5_baseline_and_fugu_matches.py`), builds the report via
+    `aggregate_metrics.build_report()`, and writes both `reports/phase6_eval_report.json`
+    (tracked) and `reports/phase6_eval_report.md` (tracked, the markdown table). Verdict
+    logic: `NO_DATA` if `reports/phase5_summary.json` doesn't exist yet or no
+    per-condition files exist yet; `PARTIAL` if some condition files exist but Phase 5's
+    own summary verdict isn't `COMPLETE` yet (lets a human peek at in-progress numbers
+    without the orchestrator treating it as final -- see below); `COMPLETE` once Phase
+    5's own summary says so. **Deliberately does NOT compute a live "majority-vote"
+    condition** -- PLAN.md's Verification section names it alongside Open-Fugu/solo/
+    random-routing, but Phase 5 (see the 2026-07-11 write-up above) only ever plays the 5
+    conditions it explicitly scoped, and flagged the missing majority-vote condition as
+    "worth a second look before Phase 6 assumes it's covered." It genuinely can't be
+    reconstructed after the fact from the 3 solo conditions' games either: a real
+    majority-vote condition needs per-ply cross-worker comparison at IDENTICAL
+    positions, a different game loop than Phase 5's independent
+    single-orchestrator-per-game structure -- the solo conditions' move sequences
+    diverge from ply 1 onward, they were never played on synced positions. Rather than
+    silently omit this or fake it from mismatched data, the report always includes an
+    explicit `"majority_vote": null` key with a `majority_vote_note` explaining the gap
+    (both in the JSON and as a line in the markdown table) -- a live majority-vote
+    condition, if still wanted, is future work (a Phase 5 extension, or a new Phase
+    6.5), not something this aggregation-only phase can retrofit.
+  - `advance_phase_6` added to `scripts/orchestrate.py` + registered in
+    `PHASE_ADVANCERS`. Unlike Phase 3/5, this carries **no `gpu_spend_approved` gate**:
+    it only aggregates data a human already approved collecting (Phase 5's), not a fresh
+    GPU-hour spend -- same reasoning as Phase 4's own gate-free status. Unlike every
+    earlier tmux-launching advancer, this one runs **synchronously** (a plain
+    `subprocess.run`, no `tmux new-session`) -- aggregating a few hundred already-written
+    JSON game records needs no GPU and finishes in well under a second, so there's
+    nothing to protect from an SSH/session disconnect the way Phase 3/5's multi-day jobs
+    need. It **blocks until Phase 5 itself is `"done"`** (i.e.
+    `reports/phase5_summary.json`'s own verdict is `COMPLETE`) before running at all --
+    a report built from an in-progress Phase 5 run would be a misleading final
+    deliverable as the thing `state.json` calls Phase 6's completed output, even though
+    `phase6_eval_report.py` itself is capable of writing an honest `PARTIAL` one if run
+    by hand before that (useful for a human who wants to peek at partial numbers
+    mid-Phase-5 without the orchestrator mistaking that peek for "Phase 6 done").
 
 ## Cloud dev routine additions (2026-07-10)
 
@@ -519,6 +605,12 @@ to re-verify anywhere, but `m2` onward needs real worker inference.
    execution** (gated on step 2 above). Code written this session -- see "Cloud dev
    routine additions (2026-07-11)" above, including the "5 conditions" design decision
    (no separate majority-vote condition) worth a second look.
+3b. **Phase 6 (evaluation report) -- DONE writing, `pending` execution** (transitively
+    gated on step 2/3 above -- `advance_phase_6` will not run at all until Phase 5
+    reaches `"done"`). Code written this session -- see "Cloud dev routine additions
+    (2026-07-11b)" above. No further human action needed beyond flipping Phase 5's
+    `gpu_spend_approved`; once Phase 5 completes, Phase 6 runs automatically (no GPU
+    needed, no extra gate) and writes `reports/phase6_eval_report.{json,md}`.
 4. **Minichess track (`m2`) -- DONE writing, `pending` execution.** Floor-check script +
    opening book written 2026-07-10 (see "5x5 (Gardner Minichess)..." section below);
    `advance_m2` should have already run on the GPU host's cron by now --
