@@ -88,6 +88,59 @@ and needs manual handling on the new host:
 - `state.json`'s `host` field will read stale (`lotte.polytechnique.fr`) until
   `orchestrate.py` runs once on the new host and overwrites it -- expected, not a bug.
 
+## Host migration to `sole.polytechnique.fr` — DONE (2026-07-12)
+
+The new host turned out to be **`sole.polytechnique.fr`** (same institution, RTX 3090
+24GB, idle at migration time). Completed this session:
+- Project-specific deps installed into this host's own `/Data/.venv` (same shared
+  base image already present: torch 2.11.0+cu128, transformers 5.8.1, peft 0.19.1,
+  trl 0.29.1) -- `bitsandbytes`, `python-chess`, `ag2`, `cma`, `a2a-sdk[http-server]==
+  0.3.5`, `fastapi`, `uvicorn`, `httpx`, `pyyaml`, `pandas`, `scipy`, `pyffish`, all via
+  `uv pip install --python /Data/.venv/bin/python3` (no `pyproject.toml` in this repo --
+  deps are installed directly, matching how the original host was set up).
+- `bin/stockfish` (Stockfish 18 avx2) + `bin/stockfish-wrapper.sh` recreated -- **same
+  `GLIBCXX_3.4.30` / `LD_LIBRARY_PATH=/usr/local/gcc-15.1.0/lib64` workaround as
+  `lotte.polytechnique.fr`** (that gcc-15.1.0 install exists on this host too, so the
+  fix transferred as-is).
+- `vendor/llm_chess` re-cloned. `scripts/m0_setup_gardner_engine.sh` re-run --
+  `bin/fairy-stockfish` downloaded and gardner-variant-verified with **no** libstdc++
+  issue this time (different build).
+- `scripts/install_crontab.sh` + `scripts/install_systemd_timer.sh` both run --
+  `openfugu-orchestrate.timer` (systemd --user, 15min, `Persistent=true`, lingering
+  enabled) and the crontab entry (mutual self-healing, per those scripts' own header
+  comments) are both installed and active.
+- **Found and fixed a real bug**: `origin` was configured as
+  `https://github.com/Warsea12-ai/fugu.git`, which has no stored credentials on this
+  host -- `orchestrate.py`'s `git pull`/`git push` were silently failing every tick
+  (`could not read Username for 'https://github.com'`, caught as non-fatal so it wasn't
+  obvious). Switched to `git@github.com:Warsea12-ai/fugu.git` (SSH access for
+  `Warsea12-ai` already works from this host, confirmed via `ssh -T`) -- pull/push both
+  verified working end-to-end via a manual `orchestrate.py` run afterward.
+- `state.json`'s `host` field manually corrected to `sole.polytechnique.fr` --
+  **correction to this file's own claim above**: `orchestrate.py` does not actually
+  write this field itself (no `gethostname()`/similar call anywhere in it), so it will
+  stay stale forever unless hand-edited on migration, not "expected to self-heal."
+- **Not copied over (per this section's own list above, and not currently blocking
+  anything real)**: `checkpoints/phase4_sft/backbone_head_svf.pt` and `logs/` from
+  `lotte`. Phase 5 (the only phase that would consume the checkpoint) is gated `false`
+  regardless (see the deep-review verdict above) and unaffected either way; revisit
+  copying it only once that gate is actually being reconsidered.
+
+**⚠️ Still open — needs a human, not another Claude session on this host**: `lotte
+.polytechnique.fr`'s own crontab/systemd timer is **still running post-migration**.
+Confirmed by two near-simultaneous `orchestrate: automated status sync` commits ~90s
+apart, one authored while this host was mid-setup, before its own crontab even
+existed -- i.e. `lotte` pushed it independently. Both were harmless (`state.json`
+timestamp-only bumps; Phase 5 correctly reported `blocked` on both, so no duplicate
+GPU spend happened this time), but this **directly violates the project's own
+"one machine at a time" hard constraint** the moment any `gpu_spend_approved` gate
+gets flipped -- both hosts' cron would race to launch the same phase. This session
+could not reach `lotte` to disable it (`ssh lotte.polytechnique.fr` from `sole` prompts
+for a password, no key-based access configured between the two). **Someone with
+interactive access to `lotte` needs to run
+`crontab -r` and `systemctl --user disable --now openfugu-orchestrate.timer` there**
+before trusting any future autonomous GPU-spend approval.
+
 ## What's actually done
 
 - [x] **Phase 0 (env setup).** Repo cloned to `/Data/alfred.ruscher/fugu`, `chmod 700`
