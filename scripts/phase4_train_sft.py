@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +31,9 @@ sys.path.insert(0, str(PROJECT_DIR / "src"))
 sys.path.insert(0, str(PROJECT_DIR / "scripts"))
 
 from disk_guard import check_disk_budget  # noqa: E402
-from open_fugu.train.train_sft import build_soft_targets, load_jsonl, load_positions, train  # noqa: E402
+from open_fugu.train.train_sft import (  # noqa: E402
+    build_soft_targets, load_jsonl, load_positions, split_train_val, train,
+)
 
 SFT_DATA_DIR = PROJECT_DIR / "logs" / "phase3_sft_data"      # Phase 3's output (gitignored)
 POSITIONS_PATH = SFT_DATA_DIR / "positions.jsonl"
@@ -58,26 +61,34 @@ def load_worker_records(workers: list) -> dict:
 
 
 def write_summary(n_targets: int, n_positions: int, workers: list, losses: list,
-                   checkpoint_path: Path) -> dict:
+                   val_losses: list, n_val: int, checkpoint_path: Path) -> dict:
+    uniform_baseline = math.log(len(workers)) if workers else None
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "n_positions_available": n_positions,
         "n_soft_targets": n_targets,
+        "n_val_targets": n_val,
         "workers": workers,
         "final_loss": losses[-1] if losses else None,
         "mean_loss_last_50": (sum(losses[-50:]) / len(losses[-50:])) if losses else None,
+        "val_loss_per_epoch": val_losses,
+        "final_val_loss": val_losses[-1] if val_losses else None,
+        "uniform_baseline_cross_entropy": uniform_baseline,
         "checkpoint_path": str(checkpoint_path) if losses else None,
         "verdict": "COMPLETE" if n_targets > 0 and losses else "NO_DATA",
         "note": ("selection head + SVF-z state dict trained via SFT (cross-entropy vs. a "
                  "softmax-tau soft target built from Phase 3's per-worker mean reward per "
-                 "position). Does not itself run any blindfold games -- Phase 5 is what "
-                 "actually plays Open-Fugu (this checkpoint's routing) vs. baselines. "
-                 "Phase 0.5's floor check (reports/phase0_5_summary.json) came back "
-                 "REVIEW_NEEDED for this same worker pool -- a human should sanity-check "
-                 "final_loss/mean_loss_last_50 here (does the head learn a non-trivial "
-                 "routing signal at all, or is it fitting near-uniform soft targets because "
-                 "every worker mostly produces illegal moves) before trusting Phase 5's "
-                 "matches to say much."),
+                 "position), now with a held-out validation split (split_train_val(), never "
+                 "trained on) and per-epoch train-order shuffling -- 2026-07-12 fix for the "
+                 "deep-review finding that the original run's final_loss/mean_loss_last_50 "
+                 "were in-sample-only and couldn't distinguish real routing signal from "
+                 "memorizing a fixed-order training set. Compare final_val_loss against "
+                 "uniform_baseline_cross_entropy (ln(n_workers), i.e. what a routing head "
+                 "that ignores the position entirely would score) -- val_loss should be "
+                 "meaningfully BELOW that baseline and should trend down (not flat/up) across "
+                 "val_loss_per_epoch before trusting this checkpoint. Does not itself play any "
+                 "blindfold games -- Phase 5 is what actually plays Open-Fugu (this "
+                 "checkpoint's routing) vs. baselines."),
     }
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.chmod(0o700)
@@ -95,6 +106,9 @@ def main():
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--svf-n-last-layers", type=int, default=3)
+    ap.add_argument("--val-frac", type=float, default=0.15,
+                     help="fraction of soft targets held out for validation, never trained on")
+    ap.add_argument("--split-seed", type=int, default=0)
     args = ap.parse_args()
 
     check_disk_budget()
@@ -111,9 +125,13 @@ def main():
 
     checkpoint_path = CHECKPOINT_DIR / "backbone_head_svf.pt"
     if not targets:
-        write_summary(0, len(positions), args.workers, [], checkpoint_path)
+        write_summary(0, len(positions), args.workers, [], [], 0, checkpoint_path)
         print("No position has scored data from every requested worker -- nothing to train on.")
         return
+
+    train_targets, val_targets = split_train_val(targets, val_frac=args.val_frac, seed=args.split_seed)
+    print(f"Split into {len(train_targets)} train / {len(val_targets)} held-out val targets "
+          f"(val_frac={args.val_frac}, seed={args.split_seed})", flush=True)
 
     import torch
 
@@ -125,7 +143,7 @@ def main():
         svf_n_last_layers=args.svf_n_last_layers,
     )
     backbone = OrchestratorBackbone(config)
-    losses = train(targets, backbone, epochs=args.epochs, lr=args.lr)
+    losses, val_losses = train(train_targets, val_targets, backbone, epochs=args.epochs, lr=args.lr)
 
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     CHECKPOINT_DIR.chmod(0o700)
@@ -139,8 +157,11 @@ def main():
     torch.save(state, checkpoint_path)
     checkpoint_path.chmod(0o600)
 
-    summary = write_summary(len(targets), len(positions), args.workers, losses, checkpoint_path)
-    print(f"\nVerdict: {summary['verdict']} (final_loss={summary['final_loss']})")
+    summary = write_summary(len(targets), len(positions), args.workers, losses,
+                             val_losses, len(val_targets), checkpoint_path)
+    print(f"\nVerdict: {summary['verdict']} (final_loss={summary['final_loss']}, "
+          f"final_val_loss={summary['final_val_loss']}, "
+          f"uniform_baseline={summary['uniform_baseline_cross_entropy']:.4f})")
 
 
 if __name__ == "__main__":

@@ -1,16 +1,16 @@
 {
-  "generated_at": "2026-07-07T06:36:06.248753+00:00",
+  "generated_at": "2026-07-12T07:53:42.466985+00:00",
   "workers": {
     "qwen2.5-7b": {
-      "mean_legal_move_rate": 0.0,
+      "mean_legal_move_rate": 0.611111111111111,
       "any_illegal_termination": true
     },
     "mistral-7b": {
-      "mean_legal_move_rate": 0.4444444444444444,
+      "mean_legal_move_rate": 0.6388888888888888,
       "any_illegal_termination": true
     },
     "deepseek-r1-distill-qwen-7b": {
-      "mean_legal_move_rate": 0.2222222222222222,
+      "mean_legal_move_rate": 0.25,
       "any_illegal_termination": true
     }
   },

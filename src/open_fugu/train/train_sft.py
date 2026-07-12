@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 
 @dataclass
@@ -93,8 +94,58 @@ def build_soft_targets(positions: Dict[int, List[str]], worker_records: Dict[str
     return targets
 
 
-def train(targets: List[SoftTarget], backbone, epochs: int = 3, lr: float = 1e-3,
-          log_every: int = 50) -> List[float]:
+def split_train_val(targets: List[SoftTarget], val_frac: float = 0.15,
+                     seed: int = 0) -> Tuple[List[SoftTarget], List[SoftTarget]]:
+    """Deterministic held-out split, done once before training starts (not
+    re-shuffled per epoch like the training order is) so val_loss is
+    comparable across epochs. Pure-logic, no torch dependency -- see this
+    module's docstring for why that split matters for cloud-sandbox
+    testability.
+
+    2026-07-12 deep-review finding this fixes: the original train() reported
+    loss on the same examples it fit, in the same order every epoch, which
+    made `final_loss`/`mean_loss_last_50` look like convergence metrics when
+    they weren't -- there was no way to tell "fit the training data" apart
+    from "learned a routing signal that generalizes.\""""
+    if len(targets) < 2:
+        return targets, []
+    order = list(range(len(targets)))
+    random.Random(seed).shuffle(order)
+    n_val = max(1, round(len(targets) * val_frac))
+    val_idx = set(order[:n_val])
+    train_targets = [t for i, t in enumerate(targets) if i not in val_idx]
+    val_targets = [t for i, t in enumerate(targets) if i in val_idx]
+    return train_targets, val_targets
+
+
+def _cross_entropy(target: SoftTarget, backbone) -> "torch.Tensor":  # noqa: F821 -- torch only imported by callers
+    from open_fugu.chess_blindfold.harness import format_opening_prompt
+    import torch
+
+    color = "white" if len(target.opening_uci_moves) % 2 == 0 else "black"
+    prompt = format_opening_prompt(color, target.opening_uci_moves)
+    logits = backbone(prompt)
+    log_probs = torch.log_softmax(logits, dim=-1)
+    target_probs = torch.tensor(target.probs, dtype=log_probs.dtype, device=log_probs.device)
+    return -(target_probs * log_probs).sum()
+
+
+def evaluate(targets: List[SoftTarget], backbone) -> float:
+    """Mean cross-entropy loss over `targets` with gradients disabled -- no
+    optimizer step, no effect on training. Used for the held-out validation
+    split; also callable standalone for a pre-training baseline check."""
+    import torch
+
+    if not targets:
+        return float("nan")
+    with torch.no_grad():
+        total = sum(_cross_entropy(t, backbone).item() for t in targets)
+    return total / len(targets)
+
+
+def train(train_targets: List[SoftTarget], val_targets: List[SoftTarget], backbone,
+          epochs: int = 3, lr: float = 1e-3, log_every: int = 50,
+          shuffle_seed: int = 0) -> Tuple[List[float], List[float]]:
     """Plain AdamW loop over backbone.trainable_parameters() (the selection
     head + every SVFLinear's z, per PLAN.md -- everything else in the
     backbone stays frozen). One step per (position, epoch); loss is
@@ -103,25 +154,31 @@ def train(targets: List[SoftTarget], backbone, epochs: int = 3, lr: float = 1e-3
     to the target distribution's own entropy, which is a constant w.r.t. the
     trained parameters and so doesn't affect the gradient.
 
-    Returns the full per-step loss history (not just epoch means) so the
-    caller can report both a final loss and a short trailing-window mean --
-    useful signal for a human reviewing whether training actually converged
-    at all, not just that it ran."""
-    import torch
+    Re-shuffles `train_targets`' order every epoch (seeded, reproducible) --
+    the original version iterated in the same fixed order every epoch, which
+    the 2026-07-12 deep-review flagged as a real confound: positions late in
+    that fixed order got systematically fresher gradient updates each epoch
+    than positions early in it, not just harder/easier positions. Evaluates
+    `val_targets` (held out by split_train_val(), never trained on) after
+    every epoch under no_grad() -- this is the actual generalization signal
+    that review found missing; `final_loss`/`mean_loss_last_50` alone can't
+    distinguish "learned a real routing signal" from "memorized this exact
+    400-position training set."
 
-    from open_fugu.chess_blindfold.harness import format_opening_prompt
+    Returns (train_losses, val_losses_per_epoch) -- train_losses is the full
+    per-step history (not just epoch means), val_losses_per_epoch has one
+    entry per epoch."""
+    import torch
 
     optimizer = torch.optim.AdamW(backbone.trainable_parameters(), lr=lr)
     losses: List[float] = []
+    val_losses: List[float] = []
+    rng = random.Random(shuffle_seed)
     for epoch in range(epochs):
-        for i, target in enumerate(targets):
-            color = "white" if len(target.opening_uci_moves) % 2 == 0 else "black"
-            prompt = format_opening_prompt(color, target.opening_uci_moves)
-
-            logits = backbone(prompt)
-            log_probs = torch.log_softmax(logits, dim=-1)
-            target_probs = torch.tensor(target.probs, dtype=log_probs.dtype, device=log_probs.device)
-            loss = -(target_probs * log_probs).sum()
+        order = list(range(len(train_targets)))
+        rng.shuffle(order)
+        for step, idx in enumerate(order):
+            loss = _cross_entropy(train_targets[idx], backbone)
 
             optimizer.zero_grad()
             loss.backward()
@@ -129,6 +186,11 @@ def train(targets: List[SoftTarget], backbone, epochs: int = 3, lr: float = 1e-3
 
             loss_value = loss.item()
             losses.append(loss_value)
-            if (i + 1) % log_every == 0:
-                print(f"  epoch {epoch} step {i + 1}/{len(targets)} loss={loss_value:.4f}", flush=True)
-    return losses
+            if (step + 1) % log_every == 0:
+                print(f"  epoch {epoch} step {step + 1}/{len(order)} loss={loss_value:.4f}", flush=True)
+
+        val_loss = evaluate(val_targets, backbone)
+        val_losses.append(val_loss)
+        print(f"  epoch {epoch} done -- held-out val_loss={val_loss:.4f} "
+              f"(n_val={len(val_targets)})", flush=True)
+    return losses, val_losses

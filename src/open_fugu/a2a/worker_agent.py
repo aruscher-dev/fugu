@@ -22,7 +22,9 @@ from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from a2a.utils import new_agent_text_message
 
-from open_fugu.models.local_worker import CANDIDATE_WORKERS, LocalWorker, LocalWorkerConfig
+from open_fugu.models.local_worker import (
+    CANDIDATE_WORKERS, LocalWorker, LocalWorkerConfig, scaled_max_new_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +106,12 @@ def main():
 
     logger.info(f"Loading worker model {CANDIDATE_WORKERS[args.worker]} ...")
     worker = LocalWorker(LocalWorkerConfig(model_id=CANDIDATE_WORKERS[args.worker]))
-    executor = WorkerAgentExecutor(worker, max_new_tokens=args.max_new_tokens, temperature=args.temperature)
+    # scaled_max_new_tokens: leaves --max-new-tokens's default/CLI value alone
+    # for plain instruct workers, but gives reasoning-distill workers (see
+    # local_worker.REASONING_WORKER_IDS) a much bigger budget so their
+    # <think> block has room to finish before the final move.
+    gen_budget = scaled_max_new_tokens(args.worker, args.max_new_tokens)
+    executor = WorkerAgentExecutor(worker, max_new_tokens=gen_budget, temperature=args.temperature)
 
     request_handler = DefaultRequestHandler(agent_executor=executor, task_store=InMemoryTaskStore())
     app = A2AStarletteApplication(agent_card=card, http_handler=request_handler)

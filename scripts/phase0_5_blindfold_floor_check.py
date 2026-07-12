@@ -25,7 +25,9 @@ import chess  # noqa: E402
 import torch  # noqa: E402
 from disk_guard import check_disk_budget  # noqa: E402
 from open_fugu.chess_blindfold.harness import play_blindfold_vs_engine  # noqa: E402
-from open_fugu.models.local_worker import CANDIDATE_WORKERS, LocalWorker, LocalWorkerConfig  # noqa: E402
+from open_fugu.models.local_worker import (  # noqa: E402
+    CANDIDATE_WORKERS, LocalWorker, LocalWorkerConfig, scaled_max_new_tokens,
+)
 from open_fugu.reward.stockfish_scorer import StockfishScorer  # noqa: E402
 
 RESULTS_DIR = PROJECT_DIR / "logs" / "phase0_5_floor_check"
@@ -44,7 +46,8 @@ def run_floor_check_for_worker(short_id: str, model_id: str, n_games: int, max_p
     print(f"\n=== Floor check: {short_id} ({model_id}) ===", flush=True)
     check_disk_budget()  # models here are pre-cached, but be defensive anyway
 
-    worker = LocalWorker(LocalWorkerConfig(model_id=model_id, max_new_tokens=200, temperature=0.4))
+    gen_budget = scaled_max_new_tokens(short_id, 200)
+    worker = LocalWorker(LocalWorkerConfig(model_id=model_id, max_new_tokens=gen_budget, temperature=0.4))
     games = []
 
     for g in range(n_games):
@@ -52,7 +55,7 @@ def run_floor_check_for_worker(short_id: str, model_id: str, n_games: int, max_p
         scorer = StockfishScorer(skill_level=STOCKFISH_FLOOR_SKILL, depth=8)
 
         def move_fn(messages):
-            return worker.generate(messages, max_new_tokens=200)
+            return worker.generate(messages, max_new_tokens=gen_budget)
 
         def engine_move_fn(board):
             return scorer.best_move(board)

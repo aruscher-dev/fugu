@@ -65,9 +65,28 @@ def extract_uci_move(text: str, board: chess.Board) -> Optional[str]:
 # prose ("Given the current move history, I'll play...") that either runs
 # past a short max_new_tokens budget or renders the move as "e2-e4" instead
 # of the bare UCI the opening history itself was written in.
+#
+# 2026-07-12 revision (prompt-engineering pass suggested by Phase 0.5's
+# REVIEW_NEEDED verdict, reports/phase0_5_summary.json): the old wording
+# ("Reply with ONLY your move ... with no other text") was stricter than
+# extract_uci_move() actually requires -- that function already scans the
+# whole reply for the first legal-looking UCI/SAN token, tolerating
+# reasoning/prose around it. Telling models (especially reasoning-distill
+# ones, which naturally emit a <think> block regardless of instruction) that
+# NO other text is allowed didn't change what the code accepts, only added
+# an anxiety-inducing constraint models can't actually satisfy. This version
+# explicitly permits brief reasoning (paired with local_worker.py's
+# scaled_max_new_tokens() giving reasoning models enough budget to use it)
+# and adds an explicit reminder to track the position from the move history
+# rather than the starting position -- the actual failure mode a floor-check
+# rerun should help confirm/rule out.
 MOVE_FORMAT_INSTRUCTION = (
-    "Reply with ONLY your move in UCI notation (four or five lowercase "
-    "letters/digits, e.g. e2e4 or e7e8q), with no other text."
+    "You may briefly reason about the current position, but you must track "
+    "it from the move history above (each piece's CURRENT square after "
+    "those moves, not the starting position) -- your move must be strictly "
+    "legal in that resulting position. End your reply with your move in UCI "
+    "notation (four or five lowercase letters/digits, e.g. e2e4 or e7e8q) "
+    "on its own, with nothing after it."
 )
 
 
