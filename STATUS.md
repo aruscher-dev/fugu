@@ -1,12 +1,19 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-12 (cloud dev routine -- wrote Phase 9, see "Cloud dev routine
-additions (2026-07-12)" below; `minichess_phase_order` track unchanged this run). Phase
-0 through **4 are all complete** on `lotte.polytechnique.fr`: Phase 3's
-`reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records) and Phase
-4's `reports/phase4_summary.json` shows `verdict: COMPLETE` (`final_loss=0.717`,
-`mean_loss_last_50=1.711`, checkpoint at `checkpoints/phase4_sft/backbone_head_svf.pt`
-on that host -- gitignored, doesn't travel with the repo). **Phase 5 (baseline +
+Last updated: 2026-07-12 (same-day follow-up session on `sole.polytechnique.fr` -- see
+"Phase 5 root-cause fixes + Phase 3/4 redo" below for the current, real state; treat
+the paragraph below as historical/`lotte`-specific unless it matches what
+`git log`/`state.json` show now). Phase 0 through **4 were all complete** on
+`lotte.polytechnique.fr` as of 2026-07-10/11: Phase 3's old
+`reports/archive/phase3_summary_lotte_2026-07-10.json` shows `verdict: COMPLETE`
+(4,800/4,800 records) and Phase 4's old `reports/archive/phase4_summary_lotte_2026-07-10.json`
+shows `verdict: COMPLETE` (`final_loss=0.717`, `mean_loss_last_50=1.711`) -- but a
+2026-07-12 deep-review of that checkpoint found it untrustworthy (see "Handoff note"
+below), and separately the underlying raw data/checkpoint never transferred off `lotte`
+in the host migration. **Phases 3 and 4 are back to `pending` and being redone from
+scratch on `sole.polytechnique.fr`** with real fixes applied first -- see "Phase 5
+root-cause fixes + Phase 3/4 redo" below for the current, authoritative state. **Phase 5
+(baseline +
 Open-Fugu blindfold matches) is written and `pending`**, gated behind an explicit
 `gpu_spend_approved` human sign-off (see "Cloud dev routine additions (2026-07-11)"
 below for why) before the GPU host's cron will actually launch it -- **still the
@@ -140,6 +147,83 @@ for a password, no key-based access configured between the two). **Someone with
 interactive access to `lotte` needs to run
 `crontab -r` and `systemctl --user disable --now openfugu-orchestrate.timer` there**
 before trusting any future autonomous GPU-spend approval.
+
+## Phase 5 root-cause fixes + Phase 3/4 redo (2026-07-12, same-day follow-up)
+
+User instruction: "Solve the issue with phase 5 then begin making continuous use of
+this particular device's GPU." Rather than just flipping `gpu_spend_approved`, this
+session dug into *why* the 2026-07-12 deep-review verdict above found Phase 4's
+checkpoint untrustworthy and fixed the actual causes, then used the same evidence-based
+verification standard ([[feedback_deep_review_gates]] in memory) before spending any
+real GPU-hours:
+
+- **Generation-budget bug (new finding, not in the original deep-review)**: every call
+  site (Phase 0.5, Phase 3 collection, the A2A worker agent) capped `max_new_tokens` at
+  200-256 (32 in `worker_agent.py`) uniformly across all workers. `deepseek-r1-distill-
+  qwen-7b` emits a `<think>...</think>` chain-of-thought before its final answer --
+  that budget is nowhere near enough for it to finish reasoning before hitting the
+  token limit. Added `local_worker.scaled_max_new_tokens()` (6x budget for
+  `REASONING_WORKER_IDS`) and wired it into all three call sites.
+- **`MOVE_FORMAT_INSTRUCTION` revised** (`harness.py`) to match what
+  `extract_uci_move()` already tolerates (reasoning/prose around the move) instead of
+  contradicting it with "no other text", plus an explicit reminder to track the
+  position from the move history rather than the start position.
+- **Validated with a real Phase 0.5 rerun on `sole`** (all 3 workers freshly downloaded,
+  no cached data existed here) before trusting these fixes: `qwen2.5-7b` 0%->61%,
+  `mistral-7b` 44%->64% legal-move rate -- both now clear the >50% per-worker signal
+  threshold. `deepseek-r1-distill-qwen-7b` stayed low (22%->25%) -- raw-log inspection
+  (`logs/phase0_5_floor_check/deepseek-r1-distill-qwen-7b.json`, not just the aggregate
+  rate) shows ~25-95s per-reply elapsed time regardless of success/failure, i.e. it's
+  reaching a real (wrong) conclusion, not getting truncated -- genuine position-tracking
+  difficulty, consistent with the paper's own "Key open risk #3", not something more
+  prompt engineering is likely to fix cheaply. `reports/phase0_5_summary.json` updated
+  with these real numbers (verdict still `REVIEW_NEEDED` under the strict
+  all-workers->50% heuristic, but a real, evidence-backed improvement, not a rerun of
+  the same result).
+- **`train_sft.py` rewritten** to fix the exact two defects the earlier deep-review
+  found: `split_train_val()` (deterministic held-out split, seeded, never trained on)
+  and per-epoch shuffling in `train()` (was a fixed order every epoch). `train()` now
+  returns `(train_losses, val_losses_per_epoch)`; `phase4_train_sft.py`'s summary now
+  includes `final_val_loss`, `val_loss_per_epoch`, and `uniform_baseline_cross_entropy`
+  (`ln(n_workers)`) so a future review has real generalization signal instead of only
+  in-sample loss. Verified against real `torch` (fake linear backbone): split is
+  deterministic/disjoint, shuffling actually reorders, reproducible given a seed.
+- **Batched generation added** (`LocalWorker.generate_batch()`,
+  `collect_sft_data.query_batch()`) after the user asked why GPU utilization looked low
+  during the Phase 0.5 rerun -- batch-size-1 autoregressive decoding is memory-
+  bandwidth-bound, not compute-bound, so a lone `generate()` call leaves most of the
+  3090's compute idle. **Measured on this host, not assumed**: `bs=4` was *slower* than
+  sequential (0.70x -- HF's batched `generate()` makes the whole batch wait for its
+  slowest/longest row), `bs=8` barely broke even (1.23x), `bs=32` gave ~2.8x for
+  `qwen2.5-7b`. Reasoning-distill workers run sequentially (`effective_batch_size=1`
+  in `collect_for_worker()`) -- their much larger token budget and (per Phase 0.5's
+  raw logs) higher per-row time variance push toward the same regime that measured as
+  a net loss above, and this was never actually measured for a reasoning worker, so it
+  defaults to the safe (already-validated) choice rather than gambling GPU-hours on an
+  untested assumption. End-to-end correctness + resumability of the batched path
+  verified against the real GPU before trusting it for the long run.
+- **Phase 3/4 reset to `pending` and redone from scratch on `sole`**: the raw data
+  behind both phases' `COMPLETE` verdicts lived only in gitignored `logs/`/
+  `checkpoints/` on `lotte.polytechnique.fr` and did not survive the host migration --
+  old summaries preserved at `reports/archive/phase{3,4}_summary_lotte_2026-07-10.json`
+  for reference. **`phases["3"].gpu_spend_approved` is deliberately left `false`** even
+  though this session has real user authorization to spend the GPU-hours -- `lotte`'s
+  cron is still running (see above) and pulls this repo every ~15min; flipping that
+  flag to `true` would have had `lotte`'s own `orchestrate.py` auto-launch a *second*,
+  redundant/conflicting Phase 3 collection the moment it next pulled. Phase 3 was
+  instead launched by **directly invoking `scripts/phase3_collect_sft_data.py` in a
+  detached `tmux` session on `sole`**, bypassing `orchestrate.py`'s auto-launch gate on
+  purpose (the gate protects *automatic* cron-driven launches; this was a deliberate,
+  authorized, manual one). Caught and corrected a real near-miss this way: an earlier
+  commit in this session briefly had the flag set `true` before this reasoning was
+  worked out -- reverted within a couple minutes, before `lotte`'s next scheduled pull
+  (see git history around `875f697`), but this is exactly the kind of race the "one
+  machine at a time" constraint exists to prevent and is worth remembering if migrating
+  again while an old host's cron is still live. Phase 4 (`gpu_spend_approved`-free, same
+  as before) will pick up automatically via cron once Phase 3's `positions.jsonl`
+  exists, using the fixed `train_sft.py` above -- **its resulting checkpoint still needs
+  a deep-review pass (real log, not just the summary JSON) before Phase 5's gate is
+  reconsidered; COMPLETE alone does not mean trustworthy.**
 
 ## What's actually done
 
