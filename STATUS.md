@@ -221,9 +221,37 @@ real GPU-hours:
   machine at a time" constraint exists to prevent and is worth remembering if migrating
   again while an old host's cron is still live. Phase 4 (`gpu_spend_approved`-free, same
   as before) will pick up automatically via cron once Phase 3's `positions.jsonl`
-  exists, using the fixed `train_sft.py` above -- **its resulting checkpoint still needs
-  a deep-review pass (real log, not just the summary JSON) before Phase 5's gate is
-  reconsidered; COMPLETE alone does not mean trustworthy.**
+  exists, using the fixed `train_sft.py` above.
+
+**Update, same day**: the deep-review-before-flipping-the-gate step above is now itself
+automated -- user asked to "set it up so that this review is automated." Added **Phase
+4.5** (`scripts/orchestrate.py`'s `advance_phase_4_5`, registered in `PHASE_ADVANCERS`,
+inserted into `state.json`'s `phase_order` between `"4"` and `"5"`): runs automatically
+once Phase 4 reaches `done`, reads `reports/phase4_summary.json`'s
+`final_val_loss`/`val_loss_per_epoch`/`uniform_baseline_cross_entropy` (added this same
+session specifically so this check has real generalization signal, not just the
+misleading in-sample `final_loss`/`mean_loss_last_50` the original deep-review had to
+dig raw logs out for by hand) plus `reports/phase0_5_summary.json`'s worker-pool
+numbers, and only auto-flips `phases["5"].gpu_spend_approved` to `true` if the
+checkpoint has enough held-out validation data (>=10 targets), meaningfully beats the
+uniform-routing baseline (<=0.90x), isn't overfitting late (final epoch <=1.10x the
+best epoch), and at least 2/3 default workers clear Phase 0.5's own >50% bar. Always
+writes full reasoning to `reports/phase4_5_gate_review.json`, whether it approves or
+not -- a `NOT_READY` verdict doesn't retry on its own; see that file's own `note` and
+`advance_phase_4_5`'s docstring (thresholds are named `PHASE_4_5_*` module constants in
+`orchestrate.py`, easy to find and tune) for how to force a retry after changing
+something. **Verified against synthetic data before trusting it unattended**: correctly
+returns `NOT_READY` when fed the real numbers from the known-bad `lotte` run (worse
+than baseline, overfitting trend, weak worker pool) shaped into the new schema,
+correctly returns `READY_FOR_PHASE_5` and flips the gate for a genuinely good synthetic
+run, is idempotent on repeat calls (won't re-derive/re-approve once
+`phase4_5_gate_review.json` exists), and correctly refuses to approve when
+`n_val_targets` is too small even with an excellent-looking loss number. **This means
+Phase 5 can now go from Phase 3's launch all the way to either playing real matches or
+recording a clear, evidence-based no-go, with zero human/Claude intervention in
+between** -- the next thing worth checking, once Phase 3/4 finish, is simply whether
+`reports/phase4_5_gate_review.json`'s verdict looks right, not re-doing the review from
+scratch.
 
 ## What's actually done
 
