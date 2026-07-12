@@ -1,7 +1,7 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-11 (cloud dev routine -- wrote Phase 8, see "Cloud dev routine
-additions (2026-07-11d)" below; `minichess_phase_order` track unchanged this run). Phase
+Last updated: 2026-07-12 (cloud dev routine -- wrote Phase 9, see "Cloud dev routine
+additions (2026-07-12)" below; `minichess_phase_order` track unchanged this run). Phase
 0 through **4 are all complete** on `lotte.polytechnique.fr`: Phase 3's
 `reports/phase3_summary.json` shows `verdict: COMPLETE` (4,800/4,800 records) and Phase
 4's `reports/phase4_summary.json` shows `verdict: COMPLETE` (`final_loss=0.717`,
@@ -15,15 +15,17 @@ until a human flips that flag. **Phase 6 (evaluation report) has also been writt
 (code-only, like Phase 5 was before it) and is `pending` -- it needs no GPU-spend
 approval of its own (it only aggregates Phase 5's already-approved-to-collect data), but
 `advance_phase_6` still blocks on cron until Phase 5 itself reaches `done`. **Phase 7
-(stretch: sep-CMA-ES pilot on `kuhn_poker`) and Phase 8 (stretch: sep-CMA-ES on
-truncated blindfold chess) have now also been written** -- see "Cloud dev routine
-additions (2026-07-11c)"/"(2026-07-11d)" below -- and are both `pending`, each gated
+(stretch: sep-CMA-ES pilot on `kuhn_poker`), Phase 8 (stretch: sep-CMA-ES on truncated
+blindfold chess), and now Phase 9 (stretch: gtbench extension to `connect_four`/
+`breakthrough`) have all been written** -- see "Cloud dev routine additions
+(2026-07-11c)"/"(2026-07-11d)"/"(2026-07-12)" below -- and are all `pending`, each gated
 behind its own `gpu_spend_approved` flag (same reasoning as Phase 3/5's gate: a
 multi-day autonomous GPU spend). Phase 8 additionally loads the same worker pool Phase
-0.5's floor check flagged `REVIEW_NEEDED`, unlike Phase 7's kuhn_poker pilot which is
-worker-pool-independent. A human reviewing `state.json` now has **four** independent
-`gpu_spend_approved` flags to consider (Phases 3 [already `true`], 5, 7, and 8), not
-just one. See `PLAN.md` for the full approved plan this implements.
+0.5's floor check flagged `REVIEW_NEEDED`, unlike Phase 7/9's poker/board-game pilots
+which are worker-pool-independent (no chess skill involved). A human reviewing
+`state.json` now has **five** independent `gpu_spend_approved` flags to consider (Phases
+3 [already `true`], 5, 7, 8, and 9), not just one. See `PLAN.md` for the full approved
+plan this implements.
 
 ## What's actually done
 
@@ -606,6 +608,123 @@ resuming unattended without an equivalent check-in.
     works end-to-end) before flipping `state.json`'s `phases["8"].gpu_spend_approved` to
     `true`.
 
+## Cloud dev routine additions (2026-07-12)
+
+- **Phase 9 (stretch: gtbench extension) -- code written, status `pending` in
+  `state.json`, gated behind `gpu_spend_approved` (same pattern as Phase 3/5/7/8).**
+  `state.json`'s `phase_order` had every phase through `8` at `done`/`pending` and phase
+  `9` at `not_started` -- per this session's instructions, phase `9` is the first
+  `not_started` entry in that list, so this is what got built (`minichess_phase_order`'s
+  `m3` is also `not_started`, but that's a separate list this session's instructions
+  don't target, same reasoning Phase 7/8's write-ups already gave).
+
+  PLAN.md's phase table: "gtbench extension (`connect_four`/`breakthrough` +
+  `kuhn_poker`) | 2-4 days". Phase 7 validated the whole sep-CMA-ES mechanism against
+  exactly one cheap game (`kuhn_poker`) before Phase 8 spent chess GPU-hours on the same
+  loop; Phase 9 is the breadth check that pilot's own scope didn't itself answer -- does
+  the mechanism generalize past poker, to a column-pick game (`connect_four`) and a
+  coordinate-move game (`breakthrough`, on a deliberately small 3-column board -- see
+  below)? Deliberately a **smaller per-game CMA-ES budget** than Phase 7's kuhn_poker-only
+  pilot (PLAN.md's own estimate for this phase, "2-4 days" for **three** games combined,
+  is less than Phase 7's "2-5 days" for kuhn_poker **alone**) -- this phase's budget is
+  spent proving the mechanism generalizes, not re-proving it converges deeply on any one
+  game. Per PLAN.md's Verification section ("Any CMA-ES results (stretch phases) are
+  explicitly reported as scoped proof-of-concept"), none of this is a strength claim for
+  any of the three games, same disclaimer Phase 7/8 both carry.
+
+  **Found and fixed a real upstream landmine** (verified against the real
+  `jinhaoduan/GTBench` source, cloned into this session's sandbox, which has outbound
+  network access -- not guessed): `gamingbench.games.openspiel_adapter.OpenSpielGame.
+  reset()` reloads a fresh pyspiel game via `pyspiel.load_game(self.game_name)` alone.
+  This breaks, differently, for two of this phase's three games:
+  - `ConnectFour.__init__` calls `super().__init__("connect_four")` (the real pyspiel
+    game id -- loads fine), then immediately overwrites `self.game_name = 'connect4'` (a
+    *display* name used only for `env_name`/prompt-template lookup). `reset()` then calls
+    `pyspiel.load_game('connect4')` -- not a real pyspiel game id -- which raises
+    `OpenSpiel exception: Unknown game 'connect4'` on **every single call**. Confirmed by
+    actually calling `.reset()` on a real `ConnectFour()` instance in the sandbox.
+  - `Breakthrough.__init__` calls `super().__init__("breakthrough")` (loads pyspiel's
+    default 8x8/768-action board), then immediately re-does
+    `self.game = pyspiel.load_game("breakthrough", {'columns': 3})` (the smaller
+    3-column/288-action board this project actually wants -- cheaper per-rollout
+    generation cost). `reset()` reloads via `self.game_name` alone, **silently** dropping
+    the `{'columns': 3}` kwarg -- confirmed in the sandbox: `num_distinct_actions()` is
+    288 right after construction, 768 after just one `.reset()` call. Unlike
+    ConnectFour's crash, this is silent -- a CMA-ES fitness function that called
+    `game.reset()` before every match would have quietly played every match after the
+    first one on the wrong, much bigger board.
+
+  `kuhn_poker` itself has no such bug, but rather than carry a game-specific exception
+  list a future 4th game could silently fall outside of, this phase's fix is uniform:
+  every game is played by constructing a **fresh instance per match**
+  (`GameSpec.make()`) instead of ever calling `.reset()` on a shared one. Confirmed in
+  the sandbox this produces identical, correct behavior for kuhn_poker too.
+
+  - `src/open_fugu/gtbench_ext/game_registry.py` (new) -- `GameSpec` (a game's own
+    `make()` factory + `worker_max_tokens`) and the `GAME_SPECS` dict
+    (`kuhn_poker`/`connect_four`/`breakthrough`) documented above. Deliberately does not
+    import any `gamingbench` module at module scope (only inside each `_make_*`
+    closure), so it stays importable/`py_compile`-able before `vendor/gtbench` is cloned,
+    same discipline `local_transformers_model.py`/`orchestrator_router_model.py` already
+    established.
+  - `scripts/phase9_gtbench_extension.py` (new) -- generalizes
+    `phase7_cmaes_kuhn_pilot.py`'s structure to loop over `--games kuhn_poker
+    connect_four breakthrough` (default: all three, PLAN.md's own ordering). Reuses
+    `open_fugu.train.train_cmaes.run_cmaes` and
+    `gtbench_ext.{local_transformers_model,orchestrator_router_model}` **verbatim** --
+    confirmed by reading `gamingbench.agents.random_agent.RandomAgent`/
+    `prompt_agent.PromptAgent` and `gamingbench.prompts.*`'s `env_name`-keyed dispatch
+    directly that neither the fixed `RandomAgent` baseline nor the router's own
+    `PromptAgent` wrapper needed a single line changed to work with
+    `connect_four`/`breakthrough` -- only the per-game `GameSpec` differs. Builds a
+    **fresh** `OrchestratorBackbone`/selection head per game (same "own fresh backbone"
+    choice Phase 7 made) -- reports whether the mechanism generalizes across games, not
+    whether cross-game weight transfer helps (left as future work). **Per-game
+    resumable**, unlike Phase 7/8's single-game scripts: `reports/phase9_summary.json`'s
+    `games` dict is checked before each requested game's CMA-ES run starts and
+    re-persisted after every game finishes, so a crash-and-cron-relaunch partway through
+    the default 3-game list resumes at the first not-yet-`COMPLETE` game rather than
+    re-running finished ones (still can't resume *mid*-CMA-ES-run for one game, same
+    reasoning Phase 7/8 already documented -- the ask/tell state lives only in that one
+    process). Writes per-game checkpoints to
+    `checkpoints/phase9_cmaes_gtbench/<game>_selection_head.pt`.
+  - Setup is shared with Phase 7, not duplicated: `_run_setup()` calls
+    `scripts/phase7_setup_gtbench.sh` (same idempotent `vendor/gtbench` clone +
+    `pyspiel`/`python-box` install) and then does its own additional import-and-board-size
+    verification of `connect_four`/`breakthrough` (no extra system deps needed --
+    confirmed in the sandbox both games are part of the same `pyspiel`/`vendor/gtbench`
+    install Phase 7 already sets up).
+  - `advance_phase_9` added to `scripts/orchestrate.py` + registered in
+    `PHASE_ADVANCERS`, following `advance_phase_7`/`8`'s summary-file + tmux +
+    `gpu_spend_approved` pattern. Dry-run verified (mocked `tmux_session_exists`/
+    `tmux_launch`, real gate/state logic) across five reachable states: blocked (not
+    approved), launches once approved, stays `in_progress` without relaunching while its
+    tmux session is already up, returns `done` once `reports/phase9_summary.json` shows
+    overall `verdict: COMPLETE`, and (the one new state Phase 7/8 don't have) relaunches
+    on a `PARTIAL` verdict rather than treating it as blocked or done -- correctly
+    resuming at the per-game granularity described above.
+  - **Verified well beyond a bare `py_compile` check** (this sandbox has outbound network
+    access but no GPU/model access): beyond the `.reset()` bug-finding above, ran the
+    **real** `gamingbench` game loop end-to-end for all three games (`RandomAgent` vs.
+    `RandomAgent`, and `PromptAgent` vs. `RandomAgent` with both canned and
+    board-derived legal moves -- confirmed move-token parsing/game-state application for
+    `connect_four`'s `<Cx>` and `breakthrough`'s `<[a-c][1-8]->[a-c][1-8]>` formats, not
+    just `kuhn_poker`'s `<Pass>`/`<Bet>`), and ran
+    `phase9_gtbench_extension.py`'s own `make_fitness_fn`/`final_eval` against a fake
+    backbone whose weight/bias **actually drive routing** through a real linear
+    computation (not a hardcoded stub, mirroring how Phase 7/8's own write-ups verified
+    this) -- confirmed different CMA-ES candidate vectors genuinely route to different
+    workers for **every** game (`kuhn_poker`/`connect_four`/`breakthrough`), and that
+    `final_eval`'s win/loss/draw rates sum to `1.0` for every game.
+  - **Only genuinely unverifiable-from-here pieces**: real `torch`/GPU tensor-op
+    correctness and actual worker-LLM inference quality (already exercised by Phase
+    3-5/7/8, not re-verified here). `gpu_spend_approved` defaults to `false` --
+    independent of Phase 0.5's chess-quality `REVIEW_NEEDED` verdict (none of these three
+    games touch chess skill at all, same reasoning as Phase 7's gate), but still a
+    multi-day autonomous GPU spend (PLAN.md's own estimate: "2-4 days") a human should
+    sign off on first, same reasoning as every other `gpu_spend_approved` gate in this
+    project.
+
 ## Cloud dev routine additions (2026-07-10)
 
 - **Phase 4 (SVF + selection head implementation, SFT training) -- code written, status
@@ -902,6 +1021,19 @@ to re-verify anywhere, but `m2` onward needs real worker inference.
     independent of Phase 5/6's own approval chain above (different game, no shared
     dependency), so this can launch whenever, in whatever order a human prefers relative
     to Phase 5.
+4c. **Phase 9 (stretch: gtbench extension to `connect_four`/`breakthrough`) -- DONE
+    writing, `pending` execution**, gated behind `phases["9"].gpu_spend_approved`
+    (defaults `false`, same pattern as Phase 3/5/7/8 -- see "Cloud dev routine additions
+    (2026-07-12)" below for the full writeup, including a real upstream `gamingbench`
+    bug this session found and fixed: `OpenSpielGame.reset()` crashes for `ConnectFour`
+    and silently reverts `Breakthrough` to the wrong board size, worked around by
+    building a fresh game instance per match instead of ever calling `.reset()`, see
+    `src/open_fugu/gtbench_ext/game_registry.py`). A human should flip that flag once
+    ready to spend the ~2-4 days of GPU-hours PLAN.md estimates for this pilot --
+    independent of every other approval chain above (kuhn_poker/connect_four/breakthrough
+    touch no chess skill and share no checkpoint with any other phase), so this can
+    launch whenever, in whatever order a human prefers relative to Phase 5/7/8. Note this
+    phase's own script is per-game resumable (see below), unlike Phase 7/8's scripts.
 5. **Phase 1.5-ish polish**: consider a prompt-engineering pass on
    `MOVE_FORMAT_INSTRUCTION`/few-shot examples to push Phase 0.5's legal-move rates up --
    current numbers (0/44/22%) are a legitimate but weak floor (`REVIEW_NEEDED`); this

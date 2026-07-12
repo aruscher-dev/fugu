@@ -565,6 +565,66 @@ def advance_phase_8(state: dict) -> str:
     return "in_progress"
 
 
+def advance_phase_9(state: dict) -> str:
+    """Phase 9 (stretch): gtbench extension (PLAN.md phase table: "gtbench
+    extension (connect_four/breakthrough + kuhn_poker) | 2-4 days"). Extends
+    Phase 7's kuhn_poker-only sep-CMA-ES pilot to two more gtbench games with
+    meaningfully different action/observation shapes (connect_four's column
+    picks, breakthrough's coordinate moves on a deliberately small 3-column
+    board -- see gtbench_ext/game_registry.py), reusing the exact same
+    open_fugu.train.train_cmaes.run_cmaes mechanism Phase 7 already validated
+    -- this phase checks that mechanism *generalizes* across game types, not
+    that it converges deeply on any one (deliberately smaller per-game CMA-ES
+    budget than Phase 7's kuhn_poker-only pilot, see the script's own
+    docstring). Follows advance_phase_7/8's summary-file + tmux +
+    gpu_spend_approved pattern, not advance_phase_0_5/m2's per-worker one --
+    but scripts/phase9_gtbench_extension.py's own summary is itself
+    per-game-resumable (a crash-and-cron-relaunch skips already-COMPLETE
+    games in reports/phase9_summary.json's "games" dict rather than
+    re-running the whole --games list from scratch), unlike Phase 7/8's
+    single-game not-meaningfully-resumable-mid-run scripts.
+
+    Gated the same way Phase 3/5/7/8 are (phases["9"].gpu_spend_approved ==
+    true) -- independent of Phase 0.5's chess-quality verdict (none of these
+    three games touch chess skill at all, same reasoning as Phase 7's gate),
+    but still a multi-day autonomous GPU spend (PLAN.md's own estimate:
+    "2-4 days") a human should sign off on first, same reasoning as every
+    other gpu_spend_approved gate in this project."""
+    summary_path = REPORTS_DIR / "phase9_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}9_gtbench_extension"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] phase 9 gtbench extension still running in tmux session '{session}'")
+        return "in_progress"
+
+    if not state["phases"].get("9", {}).get("gpu_spend_approved"):
+        print("[orchestrate] phase 9 BLOCKED pending human sign-off: this is a stretch-goal multi-game "
+              "gtbench CMA-ES extension (PLAN.md estimate: 2-4 days of real GPU-hours across "
+              "connect_four/breakthrough/kuhn_poker). Set phases[\"9\"].gpu_spend_approved = true in "
+              "state.json once reviewed (see STATUS.md) to let this launch.")
+        return "blocked"
+
+    # Not running and not complete, and human-approved -- (re)launch. The
+    # underlying script is idempotent at the per-game granularity (skips any
+    # game whose own entry in reports/phase9_summary.json's "games" dict is
+    # already COMPLETE, see that script's main()), so a crash-and-cron-relaunch
+    # resumes at the first unfinished game rather than restarting every game
+    # from scratch -- more granular than Phase 7/8's single-game scripts,
+    # which can only restart their one CMA-ES run wholesale.
+    log_path = LOG_DIR / "phase9_gtbench_extension.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/phase9_gtbench_extension.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 PHASE_ADVANCERS = {
     "0": advance_phase_0,
     "0.5": advance_phase_0_5,
@@ -576,6 +636,7 @@ PHASE_ADVANCERS = {
     "6": advance_phase_6,
     "7": advance_phase_7,
     "8": advance_phase_8,
+    "9": advance_phase_9,
 }
 
 
