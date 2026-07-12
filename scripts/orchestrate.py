@@ -342,6 +342,145 @@ def advance_phase_4(state: dict) -> str:
     return "in_progress"
 
 
+# Tunable thresholds for advance_phase_4_5's automated gate review -- kept as
+# module-level constants (not buried in the function body) so a future
+# session can find and adjust them without re-reading the whole function.
+PHASE_4_5_MIN_VAL_TARGETS = 10          # below this, final_val_loss is too noisy to trust
+PHASE_4_5_BASELINE_MARGIN = 0.90        # final_val_loss must be <= this x uniform_baseline_cross_entropy
+PHASE_4_5_OVERFIT_TOLERANCE = 1.10      # final_val_loss must be <= this x the best epoch's val loss
+PHASE_4_5_MIN_WORKERS_PASSING = 2       # of the default 3, how many must clear Phase 0.5's >50% bar
+
+
+def advance_phase_4_5(state: dict) -> str:
+    """Phase 4.5: automated deep-review gate between Phase 4 (SFT training)
+    and Phase 5 (real match GPU-hours) -- added 2026-07-12 per explicit user
+    request ("set it up so that this review is automated"), replacing the
+    manual step where a human (or a Claude session, per
+    feedback_deep_review_gates in memory) had to read logs/phase4_sft_train.log
+    and decide by hand whether to flip phases["5"].gpu_spend_approved.
+
+    This is NOT a rubber stamp on the aggregate summary the way that
+    approach's earlier failure mode was: the 2026-07-12 deep-review that
+    found the ORIGINAL phase4_summary.json's final_loss/mean_loss_last_50
+    misleading (in-sample only, hid two positions getting worse across
+    epochs and a trailing loss worse than random) is exactly why
+    phase4_train_sft.py was rewritten to report final_val_loss/
+    val_loss_per_epoch/uniform_baseline_cross_entropy in the first place --
+    a genuine held-out generalization signal that didn't exist before. This
+    function's checks read those fields and cross-reference Phase 0.5's own
+    worker-pool floor check, mirroring the reasoning a human/Claude deep-
+    review applied by hand before those fields existed to surface it. If any
+    check fails, phases["5"].gpu_spend_approved is left untouched (stays
+    false) and the specific failing reasons are written to
+    reports/phase4_5_gate_review.json -- this function only ever
+    auto-*approves*, it never auto-denies permanently or retries training
+    with different hyperparameters on its own; a NOT_READY verdict still
+    needs a human or a future session to look at the reasons (and, if
+    warranted, the raw log) before deciding what to change and re-running
+    Phase 4.
+
+    No GPU/model access needed (pure JSON + arithmetic), so unlike Phase
+    3/5/7/8/9 this carries no gpu_spend_approved gate of its own -- it only
+    ever reads already-collected data, same reasoning as Phase 6's gate-free
+    status. Runs synchronously (no tmux), like Phase 6/m1's fast checks.
+    """
+    review_path = REPORTS_DIR / "phase4_5_gate_review.json"
+    if review_path.exists():
+        return "done"
+
+    p4_path = REPORTS_DIR / "phase4_summary.json"
+    if not p4_path.exists():
+        # Shouldn't happen -- advance_track only reaches "4.5" once phase 4
+        # itself returned "done", which requires this file to exist.
+        return "blocked"
+    p4 = json.loads(p4_path.read_text())
+
+    p0_5_path = REPORTS_DIR / "phase0_5_summary.json"
+    p0_5 = json.loads(p0_5_path.read_text()) if p0_5_path.exists() else {"workers": {}}
+
+    final_val = p4.get("final_val_loss")
+    baseline = p4.get("uniform_baseline_cross_entropy")
+    val_losses = p4.get("val_loss_per_epoch") or []
+    n_val = p4.get("n_val_targets") or 0
+
+    checks: dict = {}
+    reasons: list = []
+
+    checks["enough_val_data"] = n_val >= PHASE_4_5_MIN_VAL_TARGETS
+    if not checks["enough_val_data"]:
+        reasons.append(f"n_val_targets={n_val} < {PHASE_4_5_MIN_VAL_TARGETS} -- too few held-out "
+                        f"examples to trust final_val_loss as a generalization signal")
+
+    checks["beats_uniform_baseline"] = (
+        final_val is not None and baseline is not None
+        and final_val <= baseline * PHASE_4_5_BASELINE_MARGIN
+    )
+    if not checks["beats_uniform_baseline"]:
+        reasons.append(f"final_val_loss={final_val} is not meaningfully below "
+                        f"uniform_baseline_cross_entropy={baseline} (need <= "
+                        f"{PHASE_4_5_BASELINE_MARGIN}x baseline) -- the head may not have learned "
+                        f"a real routing signal, just fit near-uniform soft targets")
+
+    if val_losses:
+        best_val = min(val_losses)
+        checks["not_overfitting_late"] = (
+            final_val is not None and final_val <= best_val * PHASE_4_5_OVERFIT_TOLERANCE
+        )
+        if not checks["not_overfitting_late"]:
+            reasons.append(f"final_val_loss={final_val} is more than "
+                            f"{(PHASE_4_5_OVERFIT_TOLERANCE - 1) * 100:.0f}% worse than the best "
+                            f"epoch's val loss ({best_val}) -- looks like it overfit after that point")
+    else:
+        checks["not_overfitting_late"] = False
+        reasons.append("no val_loss_per_epoch data to check the overfitting trend")
+
+    workers = p0_5.get("workers", {})
+    n_passing = sum(1 for w in workers.values() if (w.get("mean_legal_move_rate") or 0) > 0.5)
+    checks["worker_pool_viable"] = n_passing >= PHASE_4_5_MIN_WORKERS_PASSING
+    if not checks["worker_pool_viable"]:
+        reasons.append(f"only {n_passing}/{len(workers)} workers clear Phase 0.5's >50% "
+                        f"legal-move-rate signal threshold (reports/phase0_5_summary.json)")
+
+    ready = all(checks.values())
+    verdict = "READY_FOR_PHASE_5" if ready else "NOT_READY"
+
+    review = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
+        "reasons": reasons,
+        "verdict": verdict,
+        "phase4_summary_snapshot": {
+            "final_val_loss": final_val,
+            "uniform_baseline_cross_entropy": baseline,
+            "val_loss_per_epoch": val_losses,
+            "n_val_targets": n_val,
+        },
+        "note": ("Automated gate review (see advance_phase_4_5's docstring in orchestrate.py "
+                 "for the full reasoning and thresholds). NOT_READY does not mean 'never' -- it "
+                 "means the current checkpoint didn't clear a specific, documented bar; see "
+                 "`reasons` above for exactly which one(s), then decide whether to adjust "
+                 "training (more data, more epochs, a different tau, etc.) and re-run Phase 4 "
+                 "(delete this file and reset state.json's phase 4 to 'pending' to retry)."),
+    }
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.chmod(0o700)
+    review_path.write_text(json.dumps(review, indent=2))
+    review_path.chmod(0o600)
+    print(f"[orchestrate] phase 4.5 gate review: {verdict}" +
+          (f" -- {'; '.join(reasons)}" if reasons else " -- all checks passed"))
+
+    if ready:
+        state["phases"]["5"]["gpu_spend_approved"] = True
+        state["phases"]["5"]["note"] = (
+            state["phases"]["5"].get("note", "")
+            + " [Auto-approved by phase 4.5's automated gate review on "
+            + review["generated_at"] + " -- see reports/phase4_5_gate_review.json.]"
+        )
+        print("[orchestrate] phase 4.5: auto-approved phases['5'].gpu_spend_approved = true")
+
+    return "done"
+
+
 def advance_phase_5(state: dict) -> str:
     """Phase 5: baseline + Open-Fugu blindfold matches (PLAN.md phase table:
     "5 conditions x ~25 games" -- 3 solo-worker baselines, Phase 1's random-
@@ -632,6 +771,7 @@ PHASE_ADVANCERS = {
     "2": advance_phase_2,
     "3": advance_phase_3,
     "4": advance_phase_4,
+    "4.5": advance_phase_4_5,
     "5": advance_phase_5,
     "6": advance_phase_6,
     "7": advance_phase_7,
