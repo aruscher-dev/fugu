@@ -27,6 +27,67 @@ which are worker-pool-independent (no chess skill involved). A human reviewing
 3 [already `true`], 5, 7, 8, and 9), not just one. See `PLAN.md` for the full approved
 plan this implements.
 
+## Handoff note (2026-07-12) — deep-review verdict + pending host migration
+
+**Policy change, effective now**: the `gpu_spend_approved` gates (Phases 5/7/8/9) are no
+longer meant to wait on a human reading the summary JSONs. Whichever Claude session is
+active should do the actual verification -- read the raw per-step training/eval logs in
+`logs/`, not just the aggregate `reports/*_summary.json` -- and record a go/no-go verdict
+here before flipping a flag. Report the verdict to the user; don't assume "I reviewed it"
+means "flip it" unless told to act.
+
+**Phase 5 verdict as of 2026-07-12: NOT approved. Do not flip
+`phases["5"].gpu_spend_approved` yet.** Reasoning (see `logs/phase4_sft_train.log` +
+`src/open_fugu/train/train_sft.py::train()`, not just `reports/phase4_summary.json`):
+training is batch-size-1, unshuffled across epochs, no held-out validation split (it
+reports loss on the same 400 examples it fits, in the same order every epoch). That lets
+per-position convergence be checked directly across the 3 logged epochs -- most of the 8
+logged positions improve, but two (the position logged at index 150 and at index 350)
+went flat-to-worse over 3 full epochs of direct exposure to the same example, which is
+signal, not noise, given the fixed ordering. `final_loss` (0.717) is a single example's
+loss (huge per-step swings 0.37-10.17 seen in the raw log), not a robust convergence
+metric, despite reading like one. `mean_loss_last_50` (1.711) is actually *higher* than
+the uniform 3-worker cross-entropy baseline (ln 3 ≈ 1.099) -- worse than guessing
+uniformly, on average, over that trailing window. Combined with Phase 0.5's already-known
+`REVIEW_NEEDED` floor check (0%/44%/22% legal-move rate across the same worker pool), the
+soft targets Phase 4 fits are likely dominated by "which worker blundered least" rather
+than genuine chess-skill differentiation -- there isn't yet convincing evidence this
+checkpoint learned a real per-position routing signal rather than partially collapsing
+toward an average output. Spending Phase 5's ~25 GPU-hours now would likely produce an
+inconclusive baseline-vs-Open-Fugu comparison for a reason already visible upstream.
+**Before reconsidering this gate**: improve Phase 0.5's legal-move rate (prompting /
+different worker models) and/or retrain Phase 4 with shuffling + a real held-out
+validation split, then re-run this same log-level check.
+
+Phases 7/8/9 have no execution data yet (still `pending`, never run), so no equivalent
+data-driven verdict exists for them yet -- only the design/code review already described
+in their "Cloud dev routine additions" sections below. Phase 7 (`kuhn_poker`) doesn't
+depend on the broken chess worker pool, so it isn't blocked by the Phase 5 finding above,
+but it hasn't been deep-reviewed at runtime either since nothing has executed.
+
+**Host migration in progress**: this project is moving off `lotte.polytechnique.fr` to a
+different (currently unnamed) machine because other users are contending for the current
+one. Everything git-tracked (code, this file, `PLAN.md`, `state.json`) transfers on
+clone/pull as normal. **What does NOT transfer -- all gitignored, per `.gitignore`** --
+and needs manual handling on the new host:
+- `checkpoints/` (currently just `checkpoints/phase4_sft/backbone_head_svf.pt`, 59KB) --
+  copy by hand (scp/rsync) if you want Phase 4's checkpoint available at all; per the
+  verdict above it isn't recommended for Phase 5 yet regardless.
+- `logs/` (includes `logs/phase3_sft_data/` raw per-worker records, needed only if
+  Phase 4 is ever retrained from scratch) and all `*.log`/`*.jsonl`/`*.pt` files.
+- `bin/` (Stockfish 18 avx512 build + `bin/stockfish-wrapper.sh`, host-specific
+  `LD_LIBRARY_PATH=/usr/local/gcc-15.1.0/lib64` workaround) -- almost certainly needs a
+  fresh install + library-path check on the new host rather than a straight copy.
+- `vendor/` (`llm_chess`, AgentBeats vendoring) -- re-clonable per Phase 0/1 notes above.
+- The crontab entry and `openfugu-orchestrate.timer` systemd unit are host-local --
+  rerun `scripts/install_crontab.sh` (and/or `scripts/install_systemd_timer.sh`) on the
+  new host; don't assume the old host's cron will somehow follow the repo.
+- Check whether the new host has its own `/Data/.venv`-equivalent shared venv or needs
+  one built fresh (torch/transformers/peft/trl + this project's deps -- see Phase 0
+  above); don't assume paths are identical to `lotte.polytechnique.fr`.
+- `state.json`'s `host` field will read stale (`lotte.polytechnique.fr`) until
+  `orchestrate.py` runs once on the new host and overwrites it -- expected, not a bug.
+
 ## What's actually done
 
 - [x] **Phase 0 (env setup).** Repo cloned to `/Data/alfred.ruscher/fugu`, `chmod 700`
