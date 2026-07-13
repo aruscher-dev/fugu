@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-07-13T10:30:01.558879+00:00",
+  "checks": {
+    "enough_val_data": true,
+    "beats_uniform_baseline": false,
+    "not_overfitting_late": false,
+    "worker_pool_viable": true
+  },
+  "reasons": [
+    "final_val_loss=1.9258405954965079 is not meaningfully below uniform_baseline_cross_entropy=1.0986122886681098 (need <= 0.9x baseline) -- the head may not have learned a real routing signal, just fit near-uniform soft targets",
+    "final_val_loss=1.9258405954965079 is more than 10% worse than the best epoch's val loss (1.4282867232958476) -- looks like it overfit after that point"
+  ],
+  "verdict": "NOT_READY",
+  "phase4_summary_snapshot": {
+    "final_val_loss": 1.9258405954965079,
+    "uniform_baseline_cross_entropy": 1.0986122886681098,
+    "val_loss_per_epoch": [
+      1.6774035479757003,
+      1.4282867232958476,
+      1.9258405954965079
+    ],
+    "n_val_targets": 60
+  },
+  "note": "Automated gate review (see advance_phase_4_5's docstring in orchestrate.py for the full reasoning and thresholds). NOT_READY does not mean 'never' -- it means the current checkpoint didn't clear a specific, documented bar; see `reasons` above for exactly which one(s), then decide whether to adjust training (more data, more epochs, a different tau, etc.) and re-run Phase 4 (delete this file and reset state.json's phase 4 to 'pending' to retry)."
+}

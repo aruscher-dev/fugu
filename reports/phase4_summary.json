@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-07-13T10:22:08.556253+00:00",
+  "n_positions_available": 400,
+  "n_soft_targets": 400,
+  "n_val_targets": 60,
+  "workers": [
+    "qwen2.5-7b",
+    "mistral-7b",
+    "deepseek-r1-distill-qwen-7b"
+  ],
+  "final_loss": 1.2151516675949097,
+  "mean_loss_last_50": 2.369328387765563,
+  "val_loss_per_epoch": [
+    1.6774035479757003,
+    1.4282867232958476,
+    1.9258405954965079
+  ],
+  "final_val_loss": 1.9258405954965079,
+  "uniform_baseline_cross_entropy": 1.0986122886681098,
+  "checkpoint_path": "/Data/alfred.ruscher/fugu/checkpoints/phase4_sft/backbone_head_svf.pt",
+  "verdict": "COMPLETE",
+  "note": "selection head + SVF-z state dict trained via SFT (cross-entropy vs. a softmax-tau soft target built from Phase 3's per-worker mean reward per position), now with a held-out validation split (split_train_val(), never trained on) and per-epoch train-order shuffling -- 2026-07-12 fix for the deep-review finding that the original run's final_loss/mean_loss_last_50 were in-sample-only and couldn't distinguish real routing signal from memorizing a fixed-order training set. Compare final_val_loss against uniform_baseline_cross_entropy (ln(n_workers), i.e. what a routing head that ignores the position entirely would score) -- val_loss should be meaningfully BELOW that baseline and should trend down (not flat/up) across val_loss_per_epoch before trusting this checkpoint. Does not itself play any blindfold games -- Phase 5 is what actually plays Open-Fugu (this checkpoint's routing) vs. baselines."
+}
