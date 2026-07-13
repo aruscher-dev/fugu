@@ -38,9 +38,15 @@ StandardError=append:${PROJECT_DIR}/logs/orchestrate_systemd.log
 desired_timer="[Unit]
 Description=Run openfugu-orchestrate every 15 minutes, catching up on boot
 
+# Persistent= only affects OnCalendar= (realtime) triggers, not OnBootSec=/
+# OnUnitActiveSec= (monotonic) -- the previous monotonic-only config went
+# permanently silent (NextElapseUSecMonotonic=infinity) any time the user
+# systemd instance itself got torn down and restarted without an actual host
+# reboot, since nothing re-armed it. OnCalendar with Persistent=true self-heals
+# in that case too: it fires immediately on next timer activation if a
+# scheduled tick was missed.
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=15min
+OnCalendar=*:0/15
 Persistent=true
 
 [Install]
