@@ -1,0 +1,6 @@
+{
+  "generated_at": "2026-07-13T08:00:38.609168+00:00",
+  "returncode": 0,
+  "passed": true,
+  "note": "returncode==0 means the A2A pipeline (worker -> orchestrator -> green judge -> EvalResult) ran to completion without crashing on the 5x5 Gardner Minichess board -- this gates wiring, not chess quality/legal-move rate (see reports/m2_gardner_floor_check_summary.json for that, currently REVIEW_NEEDED)."
+}
