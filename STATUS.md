@@ -1,9 +1,82 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-13 (cloud dev routine session -- wrote m4, see "Cloud dev routine
-additions (2026-07-13b) -- m4 Gardner Minichess SFT data collection" below for the
-newest change; the rest of this doc below is otherwise as of 2026-07-13's earlier m3
+Last updated: 2026-07-13 (cloud dev routine session -- wrote m5, see "Cloud dev routine
+additions (2026-07-13c) -- m5 Gardner Minichess SVF + SFT training" below for the
+newest change; the rest of this doc below is otherwise as of 2026-07-13's earlier m4
 session, see that section's own note).
+
+## Cloud dev routine additions (2026-07-13c) -- m5 Gardner Minichess SVF + SFT training
+
+Main `phase_order` track: no change this session -- every phase in it still has a
+status other than `not_started` (Phases 5/7/8/9 remain `pending`, gated behind their own
+`gpu_spend_approved` human sign-off flags; see the "Handoff note (2026-07-12)" section
+below -- Phase 5's is still `NOT approved`). `minichess_phase_order` track: `m5` (SVF +
+selection head + SFT training on 5x5) was the first `not_started` phase, `m4` (SFT data
+collection) having been written in the immediately preceding session (still itself
+`pending`/gated on its own `gpu_spend_approved` flag). Wrote m5's code this session
+(cloud dev routine, no GPU/`pyffish`/`bin/fairy-stockfish` access here to actually run
+it):
+
+- **`scripts/m5_train_minichess_sft.py`** (new) -- direct twin of
+  `scripts/phase4_train_sft.py`, pointed at `logs/m4_minichess_sft_data/` instead of
+  Phase 3's `logs/phase3_sft_data/`, writing `reports/m5_summary.json` +
+  `checkpoints/m5_sft/backbone_head_svf.pt` (gitignored).
+- **No changes needed to any library code** -- this is the interesting finding of this
+  session, worth flagging since PLAN.md's own phase table calls m5 "new engineering,
+  biggest risk item" (the same line notes peft has no SVF support, so SVF has to be
+  hand-rolled). That hand-rolling already happened for Phase 4 and turns out to need zero
+  board-specific logic: `src/open_fugu/train/train_sft.py`'s
+  `build_soft_targets()`/`split_train_val()`/`train()`/`evaluate()` only ever consume
+  plain `position_idx`/`opening_uci_moves`/`centipawn_loss` records (which `m4`'s
+  `collect_sft_data.py` already produces in exactly Phase 3's shape) plus
+  `harness.format_opening_prompt()` (already established board-agnostic/duck-typed by
+  m1/m3's own notes -- it formats a move-history string, never touches a board object).
+  `src/open_fugu/models/{svf,worker_backend}.py`'s `SVFLinear`/`OrchestratorBackbone`
+  are equally board-agnostic: `OrchestratorBackbone.forward()` takes a plain prompt
+  string and runs it through a Qwen2/Llama-family backbone -- it has no idea whether that
+  prompt describes an 8x8 or 5x5 game. Same reasoning m3's session found for
+  `worker_agent.py`/`orchestrator_agent.py` needing zero changes to run on Gardner
+  Minichess.
+- **`advance_m5` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**,
+  following `advance_phase_4`'s exact pattern: reads `reports/m5_summary.json`'s
+  `verdict`, tmux-launches `scripts/m5_train_minichess_sft.py` if not already running and
+  m4's `logs/m4_minichess_sft_data/positions.jsonl` exists, blocks (not silent-retries) on
+  a non-`COMPLETE` verdict. **No separate `gpu_spend_approved` gate of its own** -- same
+  reasoning `advance_phase_4`'s own docstring gives: this only reads m4's
+  already-approved data and trains a tiny parameter count (selection head + a handful of
+  SVF `z` vectors), not a new multi-GPU-hour spend against the borderline worker-quality
+  numbers that gate exists to protect. It stays naturally blocked until m4 itself is
+  approved (`minichess_phases["m4"].gpu_spend_approved`) and completes, since
+  `advance_track()` stops a whole track at the first non-`done` phase whose advancer
+  reports anything other than `"done"`/`"in_progress"`.
+- **Verification done in the sandbox, beyond a bare `py_compile` check**: ran
+  `build_soft_targets()`/`split_train_val()`/`write_summary()` against synthetic
+  `(position_idx, opening_uci_moves)` + per-worker `(position_idx, centipawn_loss)`
+  records shaped exactly like `m4`'s real output -- confirmed correct soft-target
+  probabilities (softmax over mean reward), correct train/val split sizes, correct
+  `FileNotFoundError` when a requested worker's file is missing, and correct
+  `reports/m5_summary.json` shape/permissions (`0600`). Also dry-run verified `advance_m5`
+  (mocked `tmux_session_exists`/`tmux_launch`) across all 5 reachable states: blocked
+  without m4's `positions.jsonl`, launches once present and not already running, does not
+  relaunch while its tmux session is up, reports `done` once the summary verdict is
+  `COMPLETE`, and blocks (not silently retries) on a non-`COMPLETE` verdict. The one
+  genuinely unverifiable-from-here piece, same as every GPU-gated phase before this: real
+  `torch`/GPU training itself (`train()`'s AdamW loop against a real
+  `OrchestratorBackbone`, which downloads and runs `Qwen2.5-1.5B-Instruct`).
+- **⚠️ Flag for whoever reviews the resulting checkpoint before m6/m7 use it to actually
+  play games**: same caveat m4's own session flagged -- m2's floor check
+  (`reports/m2_gardner_floor_check_summary.json`) is `REVIEW_NEEDED` with a **0%
+  legal-move rate for all 3 default workers** on this board size, markedly worse than the
+  full-chess track's own `REVIEW_NEEDED` (61%/64%/25%). Once m4+m5 actually run, a future
+  session should check `reports/m5_summary.json`'s `final_val_loss` against
+  `uniform_baseline_cross_entropy` (same generalization-signal check Phase 4.5 automates
+  for the full-chess track) before trusting this checkpoint's routing -- m5 has no
+  automated gate equivalent to Phase 4.5 yet since nothing downstream of it
+  (`gpu_spend_approved`-gated) currently depends on that verdict the way Phase 5 depends
+  on Phase 4.5's; worth adding one if m6/m7 turn out to need a go/no-go gate later.
+- `state.json`'s `m5` set to `status: "pending"` (NOT `"done"` -- this session has no way
+  to verify the training loop actually converges against a real backbone/GPU). Naturally
+  blocked behind m4 in the GPU host's cron loop until m4 completes.
 
 ## Cloud dev routine additions (2026-07-13b) -- m4 Gardner Minichess SFT data collection
 

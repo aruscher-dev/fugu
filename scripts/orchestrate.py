@@ -982,12 +982,73 @@ def advance_m4(state: dict) -> str:
     return "in_progress"
 
 
+def advance_m5(state: dict) -> str:
+    """m5: SVF + selection head implementation, SFT training on 5x5 Gardner
+    Minichess (PLAN.md's minichess phase table: "reuse Phase 4's design --
+    new engineering, biggest risk item"). Direct twin of advance_phase_4 --
+    m4 already collected and scored the raw per-(worker, position, sample)
+    records; this phase turns them into a per-position soft target
+    distribution (softmax-tau over mean reward) and trains the orchestrator
+    backbone's selection head + SVF `z` vectors (the same
+    src/open_fugu/models/{svf,worker_backend}.py and
+    src/open_fugu/train/train_sft.py Phase 4 uses -- board-agnostic already,
+    zero changes needed) against it via a plain AdamW loop.
+
+    Short relative to m4 (PLAN.md estimate for Phase 4's twin: 0.5-1 day --
+    head+SVF-z is a tiny parameter count and m4 already paid the expensive
+    part), but still launched via tmux/cron like every GPU phase rather than
+    run synchronously, since it needs the GPU and downloads the orchestrator
+    backbone model (Qwen2.5-1.5B-Instruct) on first use.
+
+    Unlike m4, this does NOT require an extra gpu_spend_approved-style human
+    sign-off gate: it only reads m4's already-collected (and already
+    human/dev-session-approved) data and trains a small number of parameters
+    -- not a new multi-GPU-hour spend against the borderline worker-quality
+    numbers that gate exists to protect, same reasoning advance_phase_4's own
+    docstring gives. See STATUS.md and this phase's own reports/m5_summary.json
+    note for why a future session should still sanity-check the resulting
+    loss/checkpoint (especially given m2's floor check REVIEW_NEEDED verdict)
+    before m6/m7 use this routing to actually play games."""
+    summary_path = REPORTS_DIR / "m5_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}_m5_sft_train"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+        print(f"[orchestrate] m5 previous run verdict was '{summary.get('verdict')}' "
+              f"(not COMPLETE) -- needs a dev session to look at, not a cron retry.")
+        return "blocked"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] m5 SFT training still running in tmux session '{session}'")
+        return "in_progress"
+
+    if not (PROJECT_DIR / "logs" / "m4_minichess_sft_data" / "positions.jsonl").exists():
+        print("[orchestrate] m5 waiting on m4's output "
+              "(logs/m4_minichess_sft_data/positions.jsonl not found yet)")
+        return "blocked"
+
+    # Not running and not complete -- (re)launch. build_soft_targets()/
+    # collect_for_worker()'s underlying data is static once m4 finished, so
+    # re-running from scratch on a crash-and-cron-relaunch is cheap here
+    # (unlike m4's multi-day resumable job).
+    log_path = LOG_DIR / "m5_minichess_sft_train.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/m5_train_minichess_sft.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 MINICHESS_PHASE_ADVANCERS = {
     "m0": advance_m0,
     "m1": advance_m1,
     "m2": advance_m2,
     "m3": advance_m3,
     "m4": advance_m4,
+    "m5": advance_m5,
 }
 
 
