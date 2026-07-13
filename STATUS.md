@@ -1,8 +1,95 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-13 (cloud dev routine session -- wrote m3, see "Cloud dev routine
-additions (2026-07-13) -- m3 Gardner Minichess A2A wiring" below for the newest change;
-the rest of this doc below is otherwise as of 2026-07-12, see that section's own note).
+Last updated: 2026-07-13 (cloud dev routine session -- wrote m4, see "Cloud dev routine
+additions (2026-07-13b) -- m4 Gardner Minichess SFT data collection" below for the
+newest change; the rest of this doc below is otherwise as of 2026-07-13's earlier m3
+session, see that section's own note).
+
+## Cloud dev routine additions (2026-07-13b) -- m4 Gardner Minichess SFT data collection
+
+Main `phase_order` track: no change this session, same as the m3 session immediately
+before this one -- every phase in it still has a status other than `not_started`.
+`minichess_phase_order` track: `m4` (SFT data collection on 5x5) was the first
+`not_started` phase, `m3` (A2A wiring) having completed earlier the same day. Wrote m4's
+code this session (cloud dev routine, no GPU/`pyffish`/`bin/fairy-stockfish` access here
+to actually run it):
+
+- **`src/open_fugu/minichess/positions.py`** (new) -- `generate_gardner_positions()`,
+  self-play position generation via `GardnerBoard`+`GardnerScorer`. Deliberately a *twin*
+  of `open_fugu.data.chess_positions.generate_positions()` rather than a shared-
+  abstraction generalization (same reasoning `board.py`/`engine.py` already established
+  for being hand-rolled twins of `chess.Board`/`StockfishScorer`, not the same classes):
+  `GardnerScorer` has no `python-chess` `SimpleEngine` underneath it to call
+  `.configure({"Skill Level": ...})` on the way `StockfishScorer` does -- Fairy-Stockfish
+  has no confirmed `Skill Level` UCI option on this binary (per m2's own note), so a
+  `DEPTH_LEVELS` spread (`[1, 2, 4, 6, 9, 13]`) is the diversity/weakening lever here
+  instead, one fresh `GardnerScorer` subprocess per attempted self-play game (`depth` is
+  fixed at construction, unlike Stockfish's reconfigurable Skill Level) rather than one
+  long-lived instance reused across games. Reuses `SampledPosition` from
+  `chess_positions.py` directly (board-agnostic dataclass, just `position_idx` +
+  `opening_uci_moves`).
+- **`src/open_fugu/minichess/collect_sft_data.py`** (new) -- `query_one_sample()`/
+  `query_batch()`/`collect_for_worker()`, a twin of
+  `open_fugu.data.collect_sft_data`'s functions swapped onto `GardnerBoard`/
+  `GardnerScorer`. Reuses `harness.format_opening_prompt()`/`extract_uci_move()`
+  directly without any wrapping -- both are already board-agnostic/duck-typed per m1/m3's
+  own notes (the former is pure move-history-text formatting, the latter already accepts
+  any `board_factory`-produced object). Reuses `load_done_keys()` directly too (pure JSON
+  logic, zero board dependency). Same batching/resume/generation-budget discipline as the
+  full-chess version (`scaled_max_new_tokens()`, `REASONING_WORKER_IDS`-gated sequential
+  fallback, append-and-flush-per-batch JSONL).
+- **`scripts/m4_collect_minichess_sft_data.py`** (new) -- thin CLI, direct twin of
+  `scripts/phase3_collect_sft_data.py`: 400 positions x 4 samples x the same 3 default
+  workers m2 already floor-checked (`qwen2.5-7b`, `mistral-7b`,
+  `deepseek-r1-distill-qwen-7b`) -- same counts as Phase 3, for direct cross-track
+  comparability rather than guessing at a "cheaper" number. Writes
+  `logs/m4_minichess_sft_data/` (gitignored, host-specific `*.jsonl`) and
+  `reports/m4_summary.json` (tracked).
+- **`advance_m4` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**,
+  following `advance_phase_3`'s exact pattern (tracked per-worker progress via
+  `reports/m4_summary.json`, resumable, tmux-launched) rather than `advance_m1`/`m3`'s
+  single-marker pattern -- this is a multi-day background job, not a one-shot check.
+- **Verification done in the sandbox, beyond a bare `py_compile` check**: this sandbox
+  has outbound network access to PyPI (installed real `pyffish` + `python-chess` into a
+  throwaway venv), but its proxy blocks GitHub hosts outside this session's scoped repo,
+  so `bin/fairy-stockfish` itself could not be downloaded here to test the real engine
+  subprocess (unlike Phase 7/8/9/m3's sessions, which could reach `jinhaoduan/GTBench`'s
+  git-clone endpoint but not arbitrary GitHub *release* file downloads -- worth noting for
+  a future session assuming "outbound network access" means *any* GitHub URL works).
+  Verified `generate_gardner_positions()` against a real `pyffish`-backed `GardnerBoard`
+  with a fake `GardnerScorer` standing in for the subprocess engine: confirmed
+  deterministic-given-seed output, every generated position replays as all-legal
+  move-by-move through real `pyffish.legal_moves()` (not just "the function returned
+  without crashing"), every position is non-terminal, `MIN_PLY` is respected, and
+  different seeds produce different positions. Verified `collect_sft_data.py`'s
+  `_score_reply()`/`query_batch()` against a real `GardnerBoard` + fake worker/scorer:
+  confirmed both the legal-move and illegal-move-detection paths score correctly (right
+  `move_uci`/`legal`/`centipawn_loss` fields), and that `query_batch()` issues exactly one
+  batched `generate_batch()` call per chunk with correct per-item score attribution across
+  a 2-item batch, not just that it runs. Also dry-run verified `advance_m4` (mocked
+  `tmux_session_exists`/`tmux_launch`) across all 5 reachable states: blocked without
+  `gpu_spend_approved`, launches once approved and not already running, does not relaunch
+  while its tmux session is up, resumes (relaunches) correctly from a partial
+  `IN_PROGRESS` summary, and reports `done` once the summary's verdict is `COMPLETE`.
+- **⚠️ GATED behind `minichess_phases["m4"].gpu_spend_approved` (left `false`)**, unlike
+  m3 (which was pipeline-wiring only, gated on returncode not chess quality, same
+  reasoning Phase 1 used to proceed past Phase 0.5's own `REVIEW_NEEDED` verdict). m4 is
+  the minichess track's exact analog of Phase 3: real GPU-hours spent collecting data
+  whose quality m2's floor check is meant to gate. m2's verdict
+  (`reports/m2_gardner_floor_check_summary.json`) is `REVIEW_NEEDED` with a **0%
+  legal-move rate for ALL 3 default workers** -- markedly worse than the full-chess
+  track's own `REVIEW_NEEDED` (61%/64%/25%, `reports/phase0_5_summary.json`). This cloud
+  dev routine has no GPU/`pyffish`/`fairy-stockfish` access and no way to read the raw
+  per-worker floor-check logs (`logs/m2_gardner_floor_check/`, gitignored, host-only) to
+  investigate *why* the Gardner floor check is at 0% across the board. Per the project's
+  evidence-based-verdict policy (see the 2026-07-12 handoff note below, which applies
+  equally here even though it was written about the full-chess track's Phase 5/7/8/9
+  gates): **whichever session next has real GPU-host log access should dig into the raw
+  `logs/m2_gardner_floor_check/*.json` `raw_replies` fields** (not just the aggregate
+  rate) before flipping this flag -- is this 5x5-specific prompt confusion (models mostly
+  trained on 8x8 chess conventions), a `GardnerBoard`/`GardnerScorer`-specific
+  scoring/harness bug, or something else? A rubber-stamp flip without that evidence would
+  repeat the exact mistake the full-chess track's Phase 5 gate was created to prevent.
 
 ## Cloud dev routine additions (2026-07-13) -- m3 Gardner Minichess A2A wiring
 

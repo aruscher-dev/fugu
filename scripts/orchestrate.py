@@ -919,11 +919,75 @@ def advance_m3(state: dict) -> str:
     return "in_progress"
 
 
+def advance_m4(state: dict) -> str:
+    """m4: SFT data collection on 5x5 Gardner Minichess (PLAN.md's minichess
+    phase table: "reuse Phase 3's design, cheap here") -- query every
+    candidate worker n=4 times on 400 self-play Gardner positions, score each
+    reply via GardnerScorer, write raw scored records for m5 to build a soft
+    target distribution from. Follows advance_phase_3's pattern (tracked
+    per-worker summary, not a single pass/fail marker) rather than advance_m3's
+    (this is a multi-day background job, not a one-shot smoke test).
+
+    Unlike m3 (pipeline-wiring only, gated on returncode not chess quality,
+    same reasoning Phase 1 used to proceed past Phase 0.5's own REVIEW_NEEDED
+    verdict), this phase is the minichess track's exact analog of Phase 3:
+    real GPU-hours spent collecting data whose quality m2's floor check gates.
+    m2 (reports/m2_gardner_floor_check_summary.json) came back REVIEW_NEEDED
+    with a 0% legal-move rate for ALL 3 default workers -- worse than the
+    full-chess track's own REVIEW_NEEDED (61%/64%/25%, reports/phase0_5_summary.json),
+    which is exactly what gates Phase 3's analogous flag. So this additionally
+    requires an explicit human/dev-session sign-off flag in state.json
+    (minichess_phases["m4"].gpu_spend_approved == true) before it will
+    tmux-launch the actual collection script -- per the project's
+    evidence-based-verdict policy (STATUS.md's 2026-07-12 handoff note), a
+    session with real GPU-host log access should dig into *why* the Gardner
+    floor check is at 0% across the board (5x5-specific prompt confusion? a
+    GardnerBoard/GardnerScorer-specific bug? something else?) before flipping
+    this -- this cloud dev routine has no GPU/pyffish/fairy-stockfish access
+    and no way to inspect the raw per-worker floor-check logs (gitignored,
+    host-only) to do that investigation itself. See STATUS.md."""
+    summary_path = REPORTS_DIR / "m4_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}_m4_sft_data"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+        done = {w: v["collected"] for w, v in summary.get("workers", {}).items()}
+    else:
+        done = None
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] m4 SFT data collection still running in tmux "
+              f"session '{session}'" + (f" (progress: {done})" if done else ""))
+        return "in_progress"
+
+    if not state["minichess_phases"].get("m4", {}).get("gpu_spend_approved"):
+        print("[orchestrate] m4 BLOCKED pending human/dev-session sign-off: m2's floor check came back "
+              "REVIEW_NEEDED with a 0% legal-move rate for all 3 default workers (see "
+              "reports/m2_gardner_floor_check_summary.json) and this phase spends real GPU-hours "
+              "against that same worker pool. Set minichess_phases[\"m4\"].gpu_spend_approved = true "
+              "in state.json once reviewed (see STATUS.md) to let this launch.")
+        return "blocked"
+
+    # Not running, not complete, and approved -- (re)launch. collect_for_worker() skips
+    # (position_idx, sample_idx) pairs already written, so a crash-and-cron-
+    # relaunch resumes rather than restarting from scratch.
+    log_path = LOG_DIR / "m4_minichess_sft_data_collection.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/m4_collect_minichess_sft_data.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 MINICHESS_PHASE_ADVANCERS = {
     "m0": advance_m0,
     "m1": advance_m1,
     "m2": advance_m2,
     "m3": advance_m3,
+    "m4": advance_m4,
 }
 
 
