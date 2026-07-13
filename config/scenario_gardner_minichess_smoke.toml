@@ -1,0 +1,36 @@
+# M3 smoke test: the minichess track's equivalent of Phase 1's
+# scenario_blindfold_chess_smoke.toml -- one worker agent + the orchestrator
+# (random-routing dummy, trivial with a single worker) + the blindfold-chess
+# green judge, all talking over A2A, but on the 5x5 Gardner Minichess board
+# (green judge started with --variant gardner) instead of full chess. Short/
+# cheap on purpose (2 short games) -- this is a pipeline-wiring check (does
+# A2A dispatch work on this board size), not a quality evaluation -- m2's
+# floor check already covers (and, as of this write-up, flags REVIEW_NEEDED
+# for) that.
+#
+# Different ports than scenario_blindfold_chess_smoke.toml on purpose so the
+# two tracks' smoke tests can never collide if a re-run of one overlaps
+# in-flight with the other.
+
+[green_agent]
+endpoint = "http://127.0.0.1:9019"
+cmd = "/Data/.venv/bin/python -m open_fugu.a2a.chess_green_agent --host 127.0.0.1 --port 9019 --variant gardner"
+
+[[participants]]
+role = "fugu_orchestrator"
+endpoint = "http://127.0.0.1:9210"
+cmd = "/Data/.venv/bin/python -m open_fugu.a2a.orchestrator_agent --workers qwen2.5-7b=http://127.0.0.1:9111 --host 127.0.0.1 --port 9210 --seed 0"
+
+[config]
+n_games = 2
+max_plies = 8
+engine_depth = 8
+
+# Note: the worker agent (qwen2.5-7b on port 9111) is NOT declared here as a
+# [[participants]] entry -- only agents the GREEN judge talks to directly go
+# in participants (per the EvalRequest.participants contract). It's started
+# separately by scripts/m3_gardner_agentbeats_smoke_test.py alongside this
+# scenario, mirroring scripts/phase1_agentbeats_smoke_test.py exactly.
+# worker_agent.py itself needs no --variant flag -- it only ever sees opaque
+# blindfold-prompt text, never a board object (see chess_green_agent.py's
+# module docstring).

@@ -886,10 +886,44 @@ def write_m2_summary(workers: list, results_dir: Path) -> None:
     print(f"[orchestrate] wrote {out_path} (verdict={verdict})")
 
 
+def advance_m3(state: dict) -> str:
+    """m3: A2A/AgentBeats wiring on 5x5 -- reuses Phase 1's worker_agent.py/
+    orchestrator_agent.py verbatim (board-agnostic, see chess_green_agent.py's
+    module docstring) plus chess_green_agent.py's new --variant gardner flag
+    (GardnerBoard/GardnerScorer via harness.py's board_factory param). Same
+    marker-file/tmux pattern as advance_phase_1 -- gates on the smoke test's
+    returncode (does the pipeline run end to end on this board size), not on
+    chess quality: m2's floor check already gates quality for this track
+    (currently REVIEW_NEEDED, 0% legal-move rate for all 3 default workers --
+    see reports/m2_gardner_floor_check_summary.json and STATUS.md), same
+    reasoning Phase 1 used to proceed despite Phase 0.5's own REVIEW_NEEDED
+    verdict on the full-chess track."""
+    marker = REPORTS_DIR / "m3_gardner_smoke_test_result.json"
+    session = f"{TMUX_SESSION_PREFIX}_m3_smoke"
+
+    if marker.exists():
+        summary = json.loads(marker.read_text())
+        if summary.get("passed"):
+            return "done"
+        print(f"[orchestrate] m3 smoke test previously failed (returncode="
+              f"{summary.get('returncode')}) -- needs a dev session to fix, not a cron retry.")
+        return "blocked"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] m3 smoke test still running in tmux session '{session}'")
+        return "in_progress"
+
+    log_path = LOG_DIR / "m3_gardner_agentbeats_smoke.log"
+    cmd = f"cd {PROJECT_DIR} && {VENV_PYTHON} scripts/m3_gardner_agentbeats_smoke_test.py >> {log_path} 2>&1"
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 MINICHESS_PHASE_ADVANCERS = {
     "m0": advance_m0,
     "m1": advance_m1,
     "m2": advance_m2,
+    "m3": advance_m3,
 }
 
 

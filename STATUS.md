@@ -1,9 +1,82 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-12 (same-day follow-up session on `sole.polytechnique.fr` -- see
-"Phase 5 root-cause fixes + Phase 3/4 redo" below for the current, real state; treat
-the paragraph below as historical/`lotte`-specific unless it matches what
-`git log`/`state.json` show now). Phase 0 through **4 were all complete** on
+Last updated: 2026-07-13 (cloud dev routine session -- wrote m3, see "Cloud dev routine
+additions (2026-07-13) -- m3 Gardner Minichess A2A wiring" below for the newest change;
+the rest of this doc below is otherwise as of 2026-07-12, see that section's own note).
+
+## Cloud dev routine additions (2026-07-13) -- m3 Gardner Minichess A2A wiring
+
+Main `phase_order` track: no change this session -- every phase in it already has a
+status other than `not_started` (Phase 3 is `in_progress`, running for real on the GPU
+host per `state.json`'s own note; Phases 4/4.5/5/6/7/8/9 are all `pending`, most gated
+behind human `gpu_spend_approved` sign-off). Nothing to write there.
+
+`minichess_phase_order` track: `m3` (A2A/AgentBeats wiring on 5x5) was the first
+`not_started` phase, `m2` (floor check) having completed in an earlier session. Wrote
+m3's code this session (no GPU/`pyffish`/`bin/fairy-stockfish`/`a2a-sdk` access here to
+actually run it, same constraint every phase-writing session before this one has had):
+
+- **`worker_agent.py` and `orchestrator_agent.py` needed zero changes.** Both only ever
+  see opaque blindfold-prompt text over A2A, never a board object -- board/variant logic
+  lives entirely in the green judge and `harness.py`'s existing `board_factory` param.
+- **`chess_green_agent.py` gained a `--variant {chess,gardner}` flag** rather than
+  forking a second green agent: `VARIANT_CONFIGS` maps each variant to its
+  `board_factory` (`chess.Board` / `GardnerBoard`) and a default opening (gardner's is
+  `pawn_knight_skirmish_c`, taken verbatim from `scripts/m2_gardner_floor_check.py`'s
+  already-hand-verified `GARDNER_OPENING_BOOK` rather than re-verified from scratch).
+  `make_scorer(variant, cfg)` picks `StockfishScorer(skill_level=...)` for `chess` or
+  `GardnerScorer(depth=...)` for `gardner` -- Fairy-Stockfish has no confirmed `Skill
+  Level` UCI option on this binary (per m2's own note), so depth is gardner's weakening
+  lever, same as m2 already uses. `play_blindfold_vs_engine_async` is called with
+  `board_factory=` threaded through per variant; everything else in `run_eval`
+  (game loop, `EvalResult` shape, winner heuristic) is unchanged and variant-agnostic.
+- **New `config/scenario_gardner_minichess_smoke.toml`** -- same shape as
+  `scenario_blindfold_chess_smoke.toml` (2 short games, one worker, random-routing
+  orchestrator), but on ports 9019/9111/9210 instead of 9009/9101/9200 so the two
+  smoke tests can never collide if one's re-run overlaps the other in flight.
+- **New `scripts/m3_gardner_agentbeats_smoke_test.py`**, directly modeled on
+  `scripts/phase1_agentbeats_smoke_test.py` (worker started as a prerequisite process,
+  not a scenario-TOML participant; hands off to `open_fugu.agentbeats.run_scenario` for
+  orchestrator+green+client_cli), writing `reports/m3_gardner_smoke_test_result.json`.
+- **`advance_m3` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**,
+  following `advance_phase_1`'s exact marker-file/tmux pattern -- gates on the smoke
+  test's `returncode` (does the A2A pipeline run end to end on this board size), NOT on
+  chess quality, same reasoning Phase 1 used to proceed past Phase 0.5's own
+  `REVIEW_NEEDED` verdict on the full-chess track.
+- **Verification done in the sandbox, beyond a bare `py_compile` check**: stubbed
+  `pyffish`/`a2a-sdk`/`uvicorn` as no-op placeholder modules via `sys.modules` and
+  imported the REAL `chess_green_agent.py` (with real `python-chess`, a wheel-only
+  install, no C toolchain needed) to exercise `VARIANT_CONFIGS`/`make_scorer`'s actual
+  routing logic against mocked `GardnerScorer`/`StockfishScorer` -- confirmed each
+  variant constructs the right scorer class with the right kwargs (including default
+  values), that an unknown `--variant` value fails fast with `ValueError` rather than
+  silently defaulting to chess, and that `prepare_agent_card` builds without error for
+  both variants. This exercises the actual module code, not a reimplementation of its
+  logic. Also parsed the new TOML with `tomllib` to confirm valid syntax/shape, and
+  dry-run verified `advance_m3` against a real `advance_track()` call (mocked
+  `tmux_session_exists`/`tmux_launch`): launches when not already running, does not
+  relaunch while its tmux session is up, and reaches `done` once the marker file
+  reports `passed: true` -- all three cases checked and passing.
+- **⚠️ Flag for whoever reviews this before m4 (SFT data collection) spends real
+  GPU-hours on this worker pool at 5x5**: m2's floor check verdict is `REVIEW_NEEDED`
+  with a **0% legal-move rate for all 3 default workers**
+  (`reports/m2_gardner_floor_check_summary.json`) -- markedly weaker than the
+  full-chess track's own `REVIEW_NEEDED` (61%/64%/25%, per `reports/phase0_5_summary
+  .json`). m3 is deliberately scoped the same way Phase 1 was (pipeline-wiring only,
+  gated on `returncode` not chess quality), so it's safe to run regardless -- but this
+  is NOT the same thing as m4 being safe to run. Before approving m4's GPU spend, a
+  human/session should dig into *why* the gardner floor check is at 0% across the
+  board: is it 5x5-specific prompt confusion (models mostly trained on 8x8 chess
+  conventions), a scoring/harness bug specific to `GardnerBoard`/`GardnerScorer`, or
+  something else? -- the same evidence-based-verdict standard the 2026-07-12 handoff
+  note (below) applied to Phase 5's own gate, not a rubber-stamp re-run.
+- `state.json`'s `m3` set to `status: "pending"` (NOT `"done"` -- this session has no
+  way to verify the smoke test actually passes against a real worker/engine binary).
+  The next GPU-host cron run should pick this up automatically.
+
+---
+
+Phase 0 through **4 were all complete** on
 `lotte.polytechnique.fr` as of 2026-07-10/11: Phase 3's old
 `reports/archive/phase3_summary_lotte_2026-07-10.json` shows `verdict: COMPLETE`
 (4,800/4,800 records) and Phase 4's old `reports/archive/phase4_summary_lotte_2026-07-10.json`
@@ -1231,13 +1304,15 @@ to re-verify anywhere, but `m2` onward needs real worker inference.
     (2026-07-11b)" above. No further human action needed beyond flipping Phase 5's
     `gpu_spend_approved`; once Phase 5 completes, Phase 6 runs automatically (no GPU
     needed, no extra gate) and writes `reports/phase6_eval_report.{json,md}`.
-4. **Minichess track (`m2`) -- DONE writing, `pending` execution.** Floor-check script +
-   opening book written 2026-07-10 (see "5x5 (Gardner Minichess)..." section below);
-   `advance_m2` should have already run on the GPU host's cron by now --
-   `reports/m2_gardner_floor_check_summary.json` shows `REVIEW_NEEDED` (0% legal-move
-   rate for all 3 default workers on 5x5, worse than full chess) -- a human should look
-   at this before m3 (A2A wiring) is built against this worker pool on the minichess
-   track, same spirit as Phase 0.5's gate. `m3` onward is still `not_started`.
+4. **Minichess track (`m2`) -- done executing.** `reports/m2_gardner_floor_check_summary
+   .json` shows `REVIEW_NEEDED` (0% legal-move rate for all 3 default workers on 5x5,
+   worse than full chess). **`m3` (A2A wiring) -- DONE writing (2026-07-13), `pending`
+   execution** -- built despite m2's weak numbers, same spirit as Phase 1 proceeding
+   past Phase 0.5's own `REVIEW_NEEDED` gate (m3 only checks the A2A pipeline runs, not
+   chess quality) -- see "Cloud dev routine additions (2026-07-13)" above for the full
+   writeup. **Before m4 (SFT data collection) spends real GPU-hours**, a human/session
+   should dig into *why* the gardner floor check is at 0% across the board -- see that
+   section's flag for specifics. `m4` onward is still `not_started`.
 4b. **Phase 7 (stretch: sep-CMA-ES pilot on `kuhn_poker`) -- DONE writing, `pending`
     execution**, gated behind `phases["7"].gpu_spend_approved` (defaults `false`, same
     pattern as Phase 3/5 -- see "Cloud dev routine additions (2026-07-11c)" above for the

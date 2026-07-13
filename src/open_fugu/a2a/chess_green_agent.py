@@ -1,22 +1,34 @@
 #!/usr/bin/env python3
 """Blindfold-chess green (judge) agent, AgentBeats-style: receives an
 EvalRequest naming one participant role ("fugu_orchestrator") by A2A URL,
-plays N blindfold games against a local Stockfish, and returns an EvalResult.
+plays N blindfold games against a local engine baseline, and returns an
+EvalResult.
 
-The real chess.Board and Stockfish scoring live entirely in this process --
-only the blindfold-legal text (opening move list, then each side's last UCI
-move) ever crosses the A2A wire to the orchestrator, exactly matching
-harness.py's in-process protocol. This is Phase 1's A2A-native replacement
-for a bespoke FastAPI router server (see STATUS.md for the architecture
-pivot rationale): the orchestrator purple agent is queried over A2A instead
-of an in-process Python call.
+The real board and engine scoring live entirely in this process -- only the
+blindfold-legal text (opening move list, then each side's last UCI move)
+ever crosses the A2A wire to the orchestrator, exactly matching harness.py's
+in-process protocol. This is Phase 1's A2A-native replacement for a bespoke
+FastAPI router server (see STATUS.md for the architecture pivot rationale):
+the orchestrator purple agent is queried over A2A instead of an in-process
+Python call.
 
-Run standalone: python -m open_fugu.a2a.chess_green_agent --port 9009
+`--variant` (m3, minichess track) reuses this exact same agent for Gardner
+Minichess (5x5) instead of forking a second green agent: harness.py's
+board_factory param + GardnerBoard/GardnerScorer (open_fugu.minichess) are
+already duck-typed to slot in wherever chess.Board/StockfishScorer were --
+see VARIANT_CONFIGS/make_scorer below. worker_agent.py and
+orchestrator_agent.py need no variant-awareness at all (they only ever see
+opaque blindfold-prompt text, never a board object).
+
+Run standalone:
+  python -m open_fugu.a2a.chess_green_agent --port 9009
+  python -m open_fugu.a2a.chess_green_agent --port 9019 --variant gardner
 """
 from __future__ import annotations
 
 import argparse
 import logging
+from typing import Any
 
 import chess
 import uvicorn
@@ -30,15 +42,41 @@ from open_fugu.agentbeats.green_executor import GreenAgent, GreenExecutor
 from open_fugu.agentbeats.models import EvalRequest, EvalResult
 from open_fugu.agentbeats.tool_provider import ToolProvider
 from open_fugu.chess_blindfold.harness import play_blindfold_vs_engine_async
+from open_fugu.minichess.board import GardnerBoard
+from open_fugu.minichess.engine import GardnerScorer
 from open_fugu.reward.stockfish_scorer import StockfishScorer
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OPENING = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"]  # Ruy Lopez
+DEFAULT_OPENING_CHESS = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"]  # Ruy Lopez
+
+# "pawn_knight_skirmish_c" from scripts/m2_gardner_floor_check.py's
+# GARDNER_OPENING_BOOK -- reused rather than re-verified, since that book's
+# own docstring already confirms every line was checked ply-by-ply against
+# pyffish.legal_moves() before being hardcoded there.
+DEFAULT_OPENING_GARDNER = ["c2c3", "b4c3", "b2c3", "b5c3"]
+
+VARIANT_CONFIGS = {
+    "chess": {"board_factory": chess.Board, "default_opening": DEFAULT_OPENING_CHESS},
+    "gardner": {"board_factory": GardnerBoard, "default_opening": DEFAULT_OPENING_GARDNER},
+}
+
+
+def make_scorer(variant: str, cfg: dict):
+    if variant == "gardner":
+        # Fairy-Stockfish (bin/fairy-stockfish) has no *confirmed* "Skill
+        # Level" UCI option on this binary (per m2_gardner_floor_check.py's
+        # own note) -- weaken via shallower search depth instead, same lever
+        # m2 already uses, rather than trusting an unverified UCI option.
+        return GardnerScorer(depth=int(cfg.get("engine_depth", 8)))
+    return StockfishScorer(skill_level=int(cfg.get("stockfish_skill_level", 1)), depth=8)
 
 
 class ChessBlindfoldGreenAgent(GreenAgent):
-    def __init__(self):
+    def __init__(self, variant: str = "chess"):
+        if variant not in VARIANT_CONFIGS:
+            raise ValueError(f"unknown variant {variant!r}, expected one of {list(VARIANT_CONFIGS)}")
+        self.variant = variant
         self._tool_provider = ToolProvider()
 
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
@@ -51,14 +89,15 @@ class ChessBlindfoldGreenAgent(GreenAgent):
         cfg = req.config
         n_games = int(cfg.get("n_games", 2))
         max_plies = int(cfg.get("max_plies", 24))
-        skill_level = int(cfg.get("stockfish_skill_level", 1))
-        opening = cfg.get("opening_uci_moves", DEFAULT_OPENING)
+        variant_cfg = VARIANT_CONFIGS[self.variant]
+        board_factory = variant_cfg["board_factory"]
+        opening = cfg.get("opening_uci_moves", variant_cfg["default_opening"])
 
         games_summary = []
         try:
             for g in range(n_games):
                 llm_color = chess.WHITE if g % 2 == 0 else chess.BLACK
-                scorer = StockfishScorer(skill_level=skill_level, depth=8)
+                scorer = make_scorer(self.variant, cfg)
                 first_call = True
 
                 async def async_move_fn(messages: list[dict]) -> str:
@@ -75,7 +114,7 @@ class ChessBlindfoldGreenAgent(GreenAgent):
                     first_call = False
                     return reply
 
-                def engine_move_fn(board: chess.Board) -> str:
+                def engine_move_fn(board: Any) -> str:
                     return scorer.best_move(board)
 
                 await updater.update_status(
@@ -91,6 +130,7 @@ class ChessBlindfoldGreenAgent(GreenAgent):
                         engine_best_move_fn=engine_move_fn,
                         scorer=scorer,
                         max_plies=max_plies,
+                        board_factory=board_factory,
                     )
                     legal_plies = [p for p in result.plies if p.legal]
                     losses = [p.centipawn_loss for p in legal_plies if p.centipawn_loss is not None]
@@ -136,12 +176,16 @@ class ChessBlindfoldGreenAgent(GreenAgent):
             self._tool_provider.reset()
 
 
-def prepare_agent_card(url: str) -> AgentCard:
+def prepare_agent_card(url: str, variant: str = "chess") -> AgentCard:
     skill = AgentSkill(
         id="blindfold_chess_eval",
         name="Blindfold chess evaluation",
-        description="Judges a purple agent (the Fugu orchestrator) at blindfold chess vs. local Stockfish.",
-        tags=["chess", "blindfold", "evaluation", "green-agent"],
+        description=(
+            "Judges a purple agent (the Fugu orchestrator) at blindfold chess "
+            "vs. a local engine baseline." + (" 5x5 Gardner Minichess variant."
+            if variant == "gardner" else "")
+        ),
+        tags=["chess", "blindfold", "evaluation", "green-agent"] + (["gardner", "5x5"] if variant == "gardner" else []),
         examples=["""
             {
               "participants": {"fugu_orchestrator": "http://127.0.0.1:9200"},
@@ -149,8 +193,8 @@ def prepare_agent_card(url: str) -> AgentCard:
             }"""],
     )
     return AgentCard(
-        name="open_fugu_chess_judge",
-        description="Green judge agent for Open-Fugu blindfold chess evaluation.",
+        name="open_fugu_chess_judge" if variant == "chess" else f"open_fugu_chess_judge_{variant}",
+        description=f"Green judge agent for Open-Fugu blindfold {variant} evaluation.",
         url=url,
         version="0.1.0",
         default_input_modes=["text/plain"],
@@ -165,14 +209,16 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9009)
     parser.add_argument("--card-url", default="")
+    parser.add_argument("--variant", choices=list(VARIANT_CONFIGS), default="chess",
+                         help="'chess' (full chess, default) or 'gardner' (5x5 Gardner Minichess, m3+)")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO if args.debug else logging.WARNING)
 
     card_url = args.card_url or f"http://{args.host}:{args.port}"
-    card = prepare_agent_card(card_url)
-    executor = GreenExecutor(ChessBlindfoldGreenAgent())
+    card = prepare_agent_card(card_url, variant=args.variant)
+    executor = GreenExecutor(ChessBlindfoldGreenAgent(variant=args.variant))
 
     request_handler = DefaultRequestHandler(agent_executor=executor, task_store=InMemoryTaskStore())
     app = A2AStarletteApplication(agent_card=card, http_handler=request_handler)
