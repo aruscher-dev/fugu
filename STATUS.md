@@ -1,8 +1,246 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-13 (cloud dev routine session -- wrote m3, see "Cloud dev routine
-additions (2026-07-13) -- m3 Gardner Minichess A2A wiring" below for the newest change;
-the rest of this doc below is otherwise as of 2026-07-12, see that section's own note).
+Last updated: 2026-07-14 (cloud dev routine session -- wrote m6, see "Cloud dev routine
+additions (2026-07-14) -- m6 Gardner Minichess sep-CMA-ES pilot" below for the newest
+change; the rest of this doc below is otherwise as of 2026-07-13's m5 session, see that
+section's own note).
+
+## Cloud dev routine additions (2026-07-14) -- m6 Gardner Minichess sep-CMA-ES pilot
+
+Main `phase_order` track: no change this session -- every phase in it still has a
+status other than `not_started` (Phases 5/7/8/9 remain `pending`, gated behind their own
+`gpu_spend_approved` flags; Phase 5's is still `NOT approved`, per the 2026-07-12
+handoff note below). `minichess_phase_order` track: `m6` (sep-CMA-ES evolutionary
+fine-tuning on 5x5, PLAN.md's minichess phase table: "originally stretch Phase 8 for
+full chess -- done here first since it's cheap and de-risks that stretch goal") was the
+first `not_started` phase, `m5` (SFT training) having been written in the immediately
+preceding session (still itself `pending`, gated on its own `gpu_spend_approved` flag,
+naturally blocking `m6` from even being attempted by `advance_track`'s
+first-non-done-phase ordering until `m5` reaches `done`). Wrote m6's code this session
+(cloud dev routine, no GPU/`pyffish`/`bin/fairy-stockfish` access here to actually run
+it):
+
+- **`src/open_fugu/train/rollout_chess.py`'s `play_one_rollout()` gained a
+  `board_factory=` parameter** (default `chess.Board`, backward compatible -- every
+  existing Phase 8 caller is unaffected) rather than forking a whole new rollout module
+  for this track. Turned out everything else in that file (`blend_reward`,
+  `RoutingHistoryTracker`, `make_dispatch_move_fn`) was already board-agnostic -- same
+  "duck-typed, thread a `board_factory` through instead of forking" pattern m1's session
+  already established for `harness.py` itself, and the same "turned out to need zero new
+  code" finding m5's session had for `train_sft.py`/`svf.py`/`worker_backend.py`.
+- **New `scripts/m6_cmaes_gardner_pilot.py`** -- direct twin of
+  `scripts/phase8_cmaes_chess_pilot.py`: reuses `open_fugu.train.train_cmaes.run_cmaes`
+  verbatim (already proven against real `kuhn_poker` reward in Phase 7 and real
+  full-chess blindfold rollouts in Phase 8), swaps in `GardnerScorer(depth=1)` (the
+  shallowest of `positions.py`'s `DEPTH_LEVELS` -- Fairy-Stockfish has no confirmed
+  `Skill Level` UCI option per m2's own note, so depth is the weakening lever here, same
+  as m2/m4's convention) for `StockfishScorer`, and `DEFAULT_OPENING` =
+  `["c2c3", "b4c3", "b2c3", "b5c3"]` (`"pawn_knight_skirmish_c"`, reused verbatim from
+  m2/m3's already-hand-verified opening book / `a2a/chess_green_agent.py`'s
+  `DEFAULT_OPENING_GARDNER`) for the Ruy Lopez. Evolves the selection head's weight+bias
+  only (SVF `z` frozen at its no-op default), starting from a **freshly-initialized**
+  `OrchestratorBackbone` -- NOT m5's SFT checkpoint, same design choice Phase 8 made:
+  this produces the demo's coordination checkpoint #3 as an independently-evolved
+  routing policy, not a fine-tune of checkpoint #2. Writes `reports/m6_summary.json` +
+  `checkpoints/m6_cmaes/selection_head.pt` (gitignored).
+- **`advance_m6` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**,
+  following `advance_m4`/`advance_phase_8`'s exact summary-file + tmux +
+  `gpu_spend_approved` pattern.
+- **Verification done in the sandbox, beyond a bare `py_compile` check**: this sandbox
+  has outbound network access to PyPI (installed real `pyffish` + `python-chess` +
+  `numpy` + `cma` into a throwaway venv, same as m4/m5's sessions). Ran the REAL
+  `play_one_rollout(board_factory=GardnerBoard)` end-to-end against a fake
+  `GardnerScorer` standing in for the Fairy-Stockfish subprocess: confirmed both the
+  legal-move-continuation path and the illegal-move immediate-termination/reward path
+  (`blend_reward`'s outcome-only branch when `mean_cpl` is `None`) work correctly
+  through real `pyffish`-backed legality checking, and confirmed the default
+  `board_factory=chess.Board` path is byte-for-byte unaffected (only a new optional
+  keyword was added, same call path as before). Also ran `make_dispatch_move_fn`
+  against a fake numpy-backed backbone (mirroring the fake-torch-shim technique Phase
+  7/8's sessions used for the same purpose) and confirmed different selection-head
+  weight/bias vectors genuinely route to different fake workers, not just that the
+  plumbing runs -- then ran `m6_cmaes_gardner_pilot.py`'s own
+  `make_fitness_fn`/`final_eval` against that same fake backbone through a real
+  `GardnerBoard` rollout, confirming `final_eval`'s win/loss/draw/unresolved rates sum
+  to 1.0. Also dry-run verified `advance_m6` (mocked `tmux_session_exists`/
+  `tmux_launch`) across all 4 reachable states: blocked without `gpu_spend_approved`,
+  launches once approved, does not relaunch while its tmux session is up, reports `done`
+  once the summary verdict is `COMPLETE`. Only genuinely unverifiable-from-here pieces:
+  real `torch`/GPU tensor-op correctness and actual worker-LLM inference quality
+  (already exercised by m2/m4/m5), and real Fairy-Stockfish subprocess scoring
+  (`GardnerScorer` itself already gated by m1).
+- **⚠️ GATED behind `minichess_phases["m6"].gpu_spend_approved` (left `false`)**, same
+  reasoning as m4/Phase 8's gates: this plays real Gardner Minichess blindfold games
+  against the same worker pool m2's floor check flagged `REVIEW_NEEDED` with a **0%
+  legal-move rate for all 3 default workers**
+  (`reports/m2_gardner_floor_check_summary.json`). A human/dev session should look at
+  both that report and `reports/phase8_summary.json` (confirms the
+  CMA-ES-on-blindfold-chess mechanism itself already works, on the full-chess track)
+  before approving -- per the project's evidence-based-verdict policy (2026-07-12
+  handoff note below), not a rubber-stamp flip.
+- `state.json`'s `m6` set to `status: "pending"` (NOT `"done"` -- this session has no
+  way to verify the training loop actually converges against a real backbone/GPU/engine
+  binary). Naturally blocked behind m5 in the GPU host's cron loop until m5 completes,
+  and behind its own `gpu_spend_approved` gate after that.
+
+## Cloud dev routine additions (2026-07-13c) -- m5 Gardner Minichess SVF + SFT training
+
+Main `phase_order` track: no change this session -- every phase in it still has a
+status other than `not_started` (Phases 5/7/8/9 remain `pending`, gated behind their own
+`gpu_spend_approved` human sign-off flags; see the "Handoff note (2026-07-12)" section
+below -- Phase 5's is still `NOT approved`). `minichess_phase_order` track: `m5` (SVF +
+selection head + SFT training on 5x5) was the first `not_started` phase, `m4` (SFT data
+collection) having been written in the immediately preceding session (still itself
+`pending`/gated on its own `gpu_spend_approved` flag). Wrote m5's code this session
+(cloud dev routine, no GPU/`pyffish`/`bin/fairy-stockfish` access here to actually run
+it):
+
+- **`scripts/m5_train_minichess_sft.py`** (new) -- direct twin of
+  `scripts/phase4_train_sft.py`, pointed at `logs/m4_minichess_sft_data/` instead of
+  Phase 3's `logs/phase3_sft_data/`, writing `reports/m5_summary.json` +
+  `checkpoints/m5_sft/backbone_head_svf.pt` (gitignored).
+- **No changes needed to any library code** -- this is the interesting finding of this
+  session, worth flagging since PLAN.md's own phase table calls m5 "new engineering,
+  biggest risk item" (the same line notes peft has no SVF support, so SVF has to be
+  hand-rolled). That hand-rolling already happened for Phase 4 and turns out to need zero
+  board-specific logic: `src/open_fugu/train/train_sft.py`'s
+  `build_soft_targets()`/`split_train_val()`/`train()`/`evaluate()` only ever consume
+  plain `position_idx`/`opening_uci_moves`/`centipawn_loss` records (which `m4`'s
+  `collect_sft_data.py` already produces in exactly Phase 3's shape) plus
+  `harness.format_opening_prompt()` (already established board-agnostic/duck-typed by
+  m1/m3's own notes -- it formats a move-history string, never touches a board object).
+  `src/open_fugu/models/{svf,worker_backend}.py`'s `SVFLinear`/`OrchestratorBackbone`
+  are equally board-agnostic: `OrchestratorBackbone.forward()` takes a plain prompt
+  string and runs it through a Qwen2/Llama-family backbone -- it has no idea whether that
+  prompt describes an 8x8 or 5x5 game. Same reasoning m3's session found for
+  `worker_agent.py`/`orchestrator_agent.py` needing zero changes to run on Gardner
+  Minichess.
+- **`advance_m5` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**,
+  following `advance_phase_4`'s exact pattern: reads `reports/m5_summary.json`'s
+  `verdict`, tmux-launches `scripts/m5_train_minichess_sft.py` if not already running and
+  m4's `logs/m4_minichess_sft_data/positions.jsonl` exists, blocks (not silent-retries) on
+  a non-`COMPLETE` verdict. **No separate `gpu_spend_approved` gate of its own** -- same
+  reasoning `advance_phase_4`'s own docstring gives: this only reads m4's
+  already-approved data and trains a tiny parameter count (selection head + a handful of
+  SVF `z` vectors), not a new multi-GPU-hour spend against the borderline worker-quality
+  numbers that gate exists to protect. It stays naturally blocked until m4 itself is
+  approved (`minichess_phases["m4"].gpu_spend_approved`) and completes, since
+  `advance_track()` stops a whole track at the first non-`done` phase whose advancer
+  reports anything other than `"done"`/`"in_progress"`.
+- **Verification done in the sandbox, beyond a bare `py_compile` check**: ran
+  `build_soft_targets()`/`split_train_val()`/`write_summary()` against synthetic
+  `(position_idx, opening_uci_moves)` + per-worker `(position_idx, centipawn_loss)`
+  records shaped exactly like `m4`'s real output -- confirmed correct soft-target
+  probabilities (softmax over mean reward), correct train/val split sizes, correct
+  `FileNotFoundError` when a requested worker's file is missing, and correct
+  `reports/m5_summary.json` shape/permissions (`0600`). Also dry-run verified `advance_m5`
+  (mocked `tmux_session_exists`/`tmux_launch`) across all 5 reachable states: blocked
+  without m4's `positions.jsonl`, launches once present and not already running, does not
+  relaunch while its tmux session is up, reports `done` once the summary verdict is
+  `COMPLETE`, and blocks (not silently retries) on a non-`COMPLETE` verdict. The one
+  genuinely unverifiable-from-here piece, same as every GPU-gated phase before this: real
+  `torch`/GPU training itself (`train()`'s AdamW loop against a real
+  `OrchestratorBackbone`, which downloads and runs `Qwen2.5-1.5B-Instruct`).
+- **⚠️ Flag for whoever reviews the resulting checkpoint before m6/m7 use it to actually
+  play games**: same caveat m4's own session flagged -- m2's floor check
+  (`reports/m2_gardner_floor_check_summary.json`) is `REVIEW_NEEDED` with a **0%
+  legal-move rate for all 3 default workers** on this board size, markedly worse than the
+  full-chess track's own `REVIEW_NEEDED` (61%/64%/25%). Once m4+m5 actually run, a future
+  session should check `reports/m5_summary.json`'s `final_val_loss` against
+  `uniform_baseline_cross_entropy` (same generalization-signal check Phase 4.5 automates
+  for the full-chess track) before trusting this checkpoint's routing -- m5 has no
+  automated gate equivalent to Phase 4.5 yet since nothing downstream of it
+  (`gpu_spend_approved`-gated) currently depends on that verdict the way Phase 5 depends
+  on Phase 4.5's; worth adding one if m6/m7 turn out to need a go/no-go gate later.
+- `state.json`'s `m5` set to `status: "pending"` (NOT `"done"` -- this session has no way
+  to verify the training loop actually converges against a real backbone/GPU). Naturally
+  blocked behind m4 in the GPU host's cron loop until m4 completes.
+
+## Cloud dev routine additions (2026-07-13b) -- m4 Gardner Minichess SFT data collection
+
+Main `phase_order` track: no change this session, same as the m3 session immediately
+before this one -- every phase in it still has a status other than `not_started`.
+`minichess_phase_order` track: `m4` (SFT data collection on 5x5) was the first
+`not_started` phase, `m3` (A2A wiring) having completed earlier the same day. Wrote m4's
+code this session (cloud dev routine, no GPU/`pyffish`/`bin/fairy-stockfish` access here
+to actually run it):
+
+- **`src/open_fugu/minichess/positions.py`** (new) -- `generate_gardner_positions()`,
+  self-play position generation via `GardnerBoard`+`GardnerScorer`. Deliberately a *twin*
+  of `open_fugu.data.chess_positions.generate_positions()` rather than a shared-
+  abstraction generalization (same reasoning `board.py`/`engine.py` already established
+  for being hand-rolled twins of `chess.Board`/`StockfishScorer`, not the same classes):
+  `GardnerScorer` has no `python-chess` `SimpleEngine` underneath it to call
+  `.configure({"Skill Level": ...})` on the way `StockfishScorer` does -- Fairy-Stockfish
+  has no confirmed `Skill Level` UCI option on this binary (per m2's own note), so a
+  `DEPTH_LEVELS` spread (`[1, 2, 4, 6, 9, 13]`) is the diversity/weakening lever here
+  instead, one fresh `GardnerScorer` subprocess per attempted self-play game (`depth` is
+  fixed at construction, unlike Stockfish's reconfigurable Skill Level) rather than one
+  long-lived instance reused across games. Reuses `SampledPosition` from
+  `chess_positions.py` directly (board-agnostic dataclass, just `position_idx` +
+  `opening_uci_moves`).
+- **`src/open_fugu/minichess/collect_sft_data.py`** (new) -- `query_one_sample()`/
+  `query_batch()`/`collect_for_worker()`, a twin of
+  `open_fugu.data.collect_sft_data`'s functions swapped onto `GardnerBoard`/
+  `GardnerScorer`. Reuses `harness.format_opening_prompt()`/`extract_uci_move()`
+  directly without any wrapping -- both are already board-agnostic/duck-typed per m1/m3's
+  own notes (the former is pure move-history-text formatting, the latter already accepts
+  any `board_factory`-produced object). Reuses `load_done_keys()` directly too (pure JSON
+  logic, zero board dependency). Same batching/resume/generation-budget discipline as the
+  full-chess version (`scaled_max_new_tokens()`, `REASONING_WORKER_IDS`-gated sequential
+  fallback, append-and-flush-per-batch JSONL).
+- **`scripts/m4_collect_minichess_sft_data.py`** (new) -- thin CLI, direct twin of
+  `scripts/phase3_collect_sft_data.py`: 400 positions x 4 samples x the same 3 default
+  workers m2 already floor-checked (`qwen2.5-7b`, `mistral-7b`,
+  `deepseek-r1-distill-qwen-7b`) -- same counts as Phase 3, for direct cross-track
+  comparability rather than guessing at a "cheaper" number. Writes
+  `logs/m4_minichess_sft_data/` (gitignored, host-specific `*.jsonl`) and
+  `reports/m4_summary.json` (tracked).
+- **`advance_m4` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**,
+  following `advance_phase_3`'s exact pattern (tracked per-worker progress via
+  `reports/m4_summary.json`, resumable, tmux-launched) rather than `advance_m1`/`m3`'s
+  single-marker pattern -- this is a multi-day background job, not a one-shot check.
+- **Verification done in the sandbox, beyond a bare `py_compile` check**: this sandbox
+  has outbound network access to PyPI (installed real `pyffish` + `python-chess` into a
+  throwaway venv), but its proxy blocks GitHub hosts outside this session's scoped repo,
+  so `bin/fairy-stockfish` itself could not be downloaded here to test the real engine
+  subprocess (unlike Phase 7/8/9/m3's sessions, which could reach `jinhaoduan/GTBench`'s
+  git-clone endpoint but not arbitrary GitHub *release* file downloads -- worth noting for
+  a future session assuming "outbound network access" means *any* GitHub URL works).
+  Verified `generate_gardner_positions()` against a real `pyffish`-backed `GardnerBoard`
+  with a fake `GardnerScorer` standing in for the subprocess engine: confirmed
+  deterministic-given-seed output, every generated position replays as all-legal
+  move-by-move through real `pyffish.legal_moves()` (not just "the function returned
+  without crashing"), every position is non-terminal, `MIN_PLY` is respected, and
+  different seeds produce different positions. Verified `collect_sft_data.py`'s
+  `_score_reply()`/`query_batch()` against a real `GardnerBoard` + fake worker/scorer:
+  confirmed both the legal-move and illegal-move-detection paths score correctly (right
+  `move_uci`/`legal`/`centipawn_loss` fields), and that `query_batch()` issues exactly one
+  batched `generate_batch()` call per chunk with correct per-item score attribution across
+  a 2-item batch, not just that it runs. Also dry-run verified `advance_m4` (mocked
+  `tmux_session_exists`/`tmux_launch`) across all 5 reachable states: blocked without
+  `gpu_spend_approved`, launches once approved and not already running, does not relaunch
+  while its tmux session is up, resumes (relaunches) correctly from a partial
+  `IN_PROGRESS` summary, and reports `done` once the summary's verdict is `COMPLETE`.
+- **⚠️ GATED behind `minichess_phases["m4"].gpu_spend_approved` (left `false`)**, unlike
+  m3 (which was pipeline-wiring only, gated on returncode not chess quality, same
+  reasoning Phase 1 used to proceed past Phase 0.5's own `REVIEW_NEEDED` verdict). m4 is
+  the minichess track's exact analog of Phase 3: real GPU-hours spent collecting data
+  whose quality m2's floor check is meant to gate. m2's verdict
+  (`reports/m2_gardner_floor_check_summary.json`) is `REVIEW_NEEDED` with a **0%
+  legal-move rate for ALL 3 default workers** -- markedly worse than the full-chess
+  track's own `REVIEW_NEEDED` (61%/64%/25%, `reports/phase0_5_summary.json`). This cloud
+  dev routine has no GPU/`pyffish`/`fairy-stockfish` access and no way to read the raw
+  per-worker floor-check logs (`logs/m2_gardner_floor_check/`, gitignored, host-only) to
+  investigate *why* the Gardner floor check is at 0% across the board. Per the project's
+  evidence-based-verdict policy (see the 2026-07-12 handoff note below, which applies
+  equally here even though it was written about the full-chess track's Phase 5/7/8/9
+  gates): **whichever session next has real GPU-host log access should dig into the raw
+  `logs/m2_gardner_floor_check/*.json` `raw_replies` fields** (not just the aggregate
+  rate) before flipping this flag -- is this 5x5-specific prompt confusion (models mostly
+  trained on 8x8 chess conventions), a `GardnerBoard`/`GardnerScorer`-specific
+  scoring/harness bug, or something else? A rubber-stamp flip without that evidence would
+  repeat the exact mistake the full-chess track's Phase 5 gate was created to prevent.
 
 ## Cloud dev routine additions (2026-07-13) -- m3 Gardner Minichess A2A wiring
 
