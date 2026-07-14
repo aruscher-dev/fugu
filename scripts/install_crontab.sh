@@ -18,12 +18,31 @@
 # from that timer's service on every 15-minute tick too, making the two
 # mechanisms mutually self-healing: whichever one does survive a given reboot
 # re-installs the other.
+#
+# Both mechanisms share the identical 15-minute schedule by design (so
+# whichever one is alive covers the full cadence alone) -- which means when
+# BOTH are alive at once (the normal, healthy state) they fire in the same
+# clock tick and would otherwise race two concurrent orchestrate.py
+# invocations against the same git working tree/state.json. Confirmed this
+# actually happens (not just theoretical): both fired at :30 on
+# 2026-07-14T07:30 CEST, one got a "Cannot fast-forward your working tree"
+# git error and the other's push was rejected non-fast-forward, and the
+# resulting churn is almost certainly what produced the many paired
+# near-simultaneous "automated status sync" commits seen historically
+# (previously misattributed to a lingering lotte.polytechnique.fr cron -- that
+# may ALSO be happening, but this same-host race reproduces the exact same
+# symptom on its own). `flock -n` below makes the loser of the race skip
+# cleanly (exit immediately, no output, no git operations) instead of
+# colliding -- do not remove even though "both mechanisms run orchestrate.py
+# every tick" looks redundant; that redundancy is what survives the crontab
+# spool getting wiped on this host's periodic reboots.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PYTHON="/Data/.venv/bin/python"
+LOCK_FILE="${PROJECT_DIR}/.orchestrate.lock"
 MARKER="# openfugu-orchestrate"
-CRON_LINE="*/15 * * * * cd ${PROJECT_DIR} && bash scripts/install_systemd_timer.sh >> logs/orchestrate_cron.log 2>&1 && ${VENV_PYTHON} scripts/orchestrate.py >> logs/orchestrate_cron.log 2>&1 ${MARKER}"
+CRON_LINE="*/15 * * * * cd ${PROJECT_DIR} && bash scripts/install_systemd_timer.sh >> logs/orchestrate_cron.log 2>&1 && /usr/bin/flock -n ${LOCK_FILE} ${VENV_PYTHON} scripts/orchestrate.py >> logs/orchestrate_cron.log 2>&1 ${MARKER}"
 
 mkdir -p "${PROJECT_DIR}/logs"
 chmod 700 "${PROJECT_DIR}/logs"

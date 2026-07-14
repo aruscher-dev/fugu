@@ -10,10 +10,19 @@
 # install_crontab.sh -- whichever mechanism survives a given reboot
 # re-installs the other), so this must be safe to run every 15 minutes: no
 # output, no error, when everything is already in the desired state.
+#
+# Both mechanisms share the identical 15-minute schedule on purpose, so when
+# both are alive (the normal state) they fire in the same tick -- the second
+# ExecStart below wraps orchestrate.py in `flock -n` against the same lock
+# file install_crontab.sh's CRON_LINE uses, so whichever trigger loses the
+# race skips cleanly instead of both racing git pull/commit/push against the
+# same working tree. See install_crontab.sh's header comment for the
+# 2026-07-14 collision this was confirmed against.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PYTHON="/Data/.venv/bin/python"
+LOCK_FILE="${PROJECT_DIR}/.orchestrate.lock"
 UNIT_DIR="${HOME}/.config/systemd/user"
 SERVICE_NAME="openfugu-orchestrate.service"
 TIMER_NAME="openfugu-orchestrate.timer"
@@ -30,7 +39,7 @@ Description=Open-Fugu orchestrate.py -- advance one phase step if possible
 Type=oneshot
 WorkingDirectory=${PROJECT_DIR}
 ExecStart=/bin/bash ${PROJECT_DIR}/scripts/install_crontab.sh
-ExecStart=${VENV_PYTHON} ${PROJECT_DIR}/scripts/orchestrate.py
+ExecStart=/usr/bin/flock -n ${LOCK_FILE} ${VENV_PYTHON} ${PROJECT_DIR}/scripts/orchestrate.py
 StandardOutput=append:${PROJECT_DIR}/logs/orchestrate_systemd.log
 StandardError=append:${PROJECT_DIR}/logs/orchestrate_systemd.log
 "
