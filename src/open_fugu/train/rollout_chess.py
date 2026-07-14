@@ -24,7 +24,9 @@ can only be exercised by the GPU host.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+import chess
 
 from open_fugu.chess_blindfold.harness import (
     UCI_RE,
@@ -144,10 +146,16 @@ class RolloutOutcome:
 
 
 def play_one_rollout(move_fn, llm_color: bool, opening_uci_moves: List[str], scorer, max_plies: int,
-                      worker_id_label: str = "fugu_router") -> RolloutOutcome:
+                      worker_id_label: str = "fugu_router",
+                      board_factory: Callable[[], Any] = chess.Board) -> RolloutOutcome:
     """One truncated blindfold game (harness.play_blindfold_vs_engine) against
     `scorer`'s engine (both the opponent's moves and the LLM's own
-    centipawn-loss grading), reward-blended per blend_reward()."""
+    centipawn-loss grading), reward-blended per blend_reward(). Pass
+    board_factory=open_fugu.minichess.board.GardnerBoard (with a matching
+    GardnerScorer as `scorer`) to run this same rollout on the 5x5 track --
+    everything above this function (blend_reward, RoutingHistoryTracker,
+    make_dispatch_move_fn) is already board-agnostic, same as harness.py
+    itself (see its own board_factory parameter's docstring)."""
     from open_fugu.chess_blindfold.harness import play_blindfold_vs_engine
 
     result = play_blindfold_vs_engine(
@@ -158,6 +166,7 @@ def play_one_rollout(move_fn, llm_color: bool, opening_uci_moves: List[str], sco
         scorer=scorer,
         max_plies=max_plies,
         worker_id=worker_id_label,
+        board_factory=board_factory,
     )
     llm_color_str = "white" if llm_color else "black"
     outcome = game_outcome({"result": result.result, "llm_color": llm_color_str})

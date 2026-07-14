@@ -1042,6 +1042,65 @@ def advance_m5(state: dict) -> str:
     return "in_progress"
 
 
+def advance_m6(state: dict) -> str:
+    """m6: sep-CMA-ES evolutionary fine-tuning on 5x5 Gardner Minichess
+    (PLAN.md's minichess phase table: "originally stretch Phase 8 for full
+    chess -- done here first since it's cheap and de-risks that stretch
+    goal"). Direct twin of advance_phase_8 -- evolves the Fugu orchestrator's
+    selection head against real end-to-end truncated Gardner-blindfold-game
+    reward via the same open_fugu.train.train_cmaes.run_cmaes Phase 7/8
+    already validated, now generalized onto GardnerBoard/GardnerScorer via
+    open_fugu.train.rollout_chess.play_one_rollout's new board_factory=
+    parameter. Produces this track's coordination checkpoint #3
+    (CMA-ES-evolved routing), independent of m5's SFT checkpoint (starts
+    from a fresh randomly-initialized backbone, same as Phase 8's own
+    design) -- m7's fixed eval suite is what actually compares checkpoints
+    #1 (m3 random)/#2 (m5 SFT)/#3 (this) against each other.
+
+    Gated the same way m4 is (minichess_phases["m6"].gpu_spend_approved ==
+    true) -- like m4, this plays real games against the same worker pool
+    m2's floor check flagged REVIEW_NEEDED (0% legal-move rate for all 3
+    default workers), so a human/dev session reviewing this flag should look
+    at reports/m2_gardner_floor_check_summary.json (worker-pool quality) and
+    reports/phase8_summary.json (confirms the CMA-ES-on-blindfold-chess
+    mechanism itself already works, on the full-chess track) before
+    approving. Naturally blocked until m5 reaches "done" by advance_track's
+    own first-non-done-phase ordering -- no separate file check needed here,
+    same reasoning advance_phase_8 relies on for waiting behind Phase 7."""
+    summary_path = REPORTS_DIR / "m6_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}_m6_cmaes_gardner"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] m6 CMA-ES Gardner Minichess pilot still running in tmux session '{session}'")
+        return "in_progress"
+
+    if not state["minichess_phases"].get("m6", {}).get("gpu_spend_approved"):
+        print("[orchestrate] m6 BLOCKED pending human/dev-session sign-off: this plays real Gardner "
+              "Minichess blindfold games (CMA-ES rollouts) against the same worker pool m2's floor "
+              "check flagged REVIEW_NEEDED (0% legal-move rate for all 3 default workers, see "
+              "reports/m2_gardner_floor_check_summary.json). Set "
+              "minichess_phases[\"m6\"].gpu_spend_approved = true in state.json once reviewed (see "
+              "STATUS.md) to let this launch.")
+        return "blocked"
+
+    # Not running and not complete, and approved -- (re)launch. The underlying
+    # script is idempotent (checks reports/m6_summary.json's own verdict
+    # before doing any work, see its main()), same not-meaningfully-
+    # resumable-mid-run reasoning as advance_phase_8.
+    log_path = LOG_DIR / "m6_cmaes_gardner_pilot.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/m6_cmaes_gardner_pilot.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 MINICHESS_PHASE_ADVANCERS = {
     "m0": advance_m0,
     "m1": advance_m1,
@@ -1049,6 +1108,7 @@ MINICHESS_PHASE_ADVANCERS = {
     "m3": advance_m3,
     "m4": advance_m4,
     "m5": advance_m5,
+    "m6": advance_m6,
 }
 
 

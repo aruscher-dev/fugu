@@ -1,9 +1,87 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-13 (cloud dev routine session -- wrote m5, see "Cloud dev routine
-additions (2026-07-13c) -- m5 Gardner Minichess SVF + SFT training" below for the
-newest change; the rest of this doc below is otherwise as of 2026-07-13's earlier m4
-session, see that section's own note).
+Last updated: 2026-07-14 (cloud dev routine session -- wrote m6, see "Cloud dev routine
+additions (2026-07-14) -- m6 Gardner Minichess sep-CMA-ES pilot" below for the newest
+change; the rest of this doc below is otherwise as of 2026-07-13's m5 session, see that
+section's own note).
+
+## Cloud dev routine additions (2026-07-14) -- m6 Gardner Minichess sep-CMA-ES pilot
+
+Main `phase_order` track: no change this session -- every phase in it still has a
+status other than `not_started` (Phases 5/7/8/9 remain `pending`, gated behind their own
+`gpu_spend_approved` flags; Phase 5's is still `NOT approved`, per the 2026-07-12
+handoff note below). `minichess_phase_order` track: `m6` (sep-CMA-ES evolutionary
+fine-tuning on 5x5, PLAN.md's minichess phase table: "originally stretch Phase 8 for
+full chess -- done here first since it's cheap and de-risks that stretch goal") was the
+first `not_started` phase, `m5` (SFT training) having been written in the immediately
+preceding session (still itself `pending`, gated on its own `gpu_spend_approved` flag,
+naturally blocking `m6` from even being attempted by `advance_track`'s
+first-non-done-phase ordering until `m5` reaches `done`). Wrote m6's code this session
+(cloud dev routine, no GPU/`pyffish`/`bin/fairy-stockfish` access here to actually run
+it):
+
+- **`src/open_fugu/train/rollout_chess.py`'s `play_one_rollout()` gained a
+  `board_factory=` parameter** (default `chess.Board`, backward compatible -- every
+  existing Phase 8 caller is unaffected) rather than forking a whole new rollout module
+  for this track. Turned out everything else in that file (`blend_reward`,
+  `RoutingHistoryTracker`, `make_dispatch_move_fn`) was already board-agnostic -- same
+  "duck-typed, thread a `board_factory` through instead of forking" pattern m1's session
+  already established for `harness.py` itself, and the same "turned out to need zero new
+  code" finding m5's session had for `train_sft.py`/`svf.py`/`worker_backend.py`.
+- **New `scripts/m6_cmaes_gardner_pilot.py`** -- direct twin of
+  `scripts/phase8_cmaes_chess_pilot.py`: reuses `open_fugu.train.train_cmaes.run_cmaes`
+  verbatim (already proven against real `kuhn_poker` reward in Phase 7 and real
+  full-chess blindfold rollouts in Phase 8), swaps in `GardnerScorer(depth=1)` (the
+  shallowest of `positions.py`'s `DEPTH_LEVELS` -- Fairy-Stockfish has no confirmed
+  `Skill Level` UCI option per m2's own note, so depth is the weakening lever here, same
+  as m2/m4's convention) for `StockfishScorer`, and `DEFAULT_OPENING` =
+  `["c2c3", "b4c3", "b2c3", "b5c3"]` (`"pawn_knight_skirmish_c"`, reused verbatim from
+  m2/m3's already-hand-verified opening book / `a2a/chess_green_agent.py`'s
+  `DEFAULT_OPENING_GARDNER`) for the Ruy Lopez. Evolves the selection head's weight+bias
+  only (SVF `z` frozen at its no-op default), starting from a **freshly-initialized**
+  `OrchestratorBackbone` -- NOT m5's SFT checkpoint, same design choice Phase 8 made:
+  this produces the demo's coordination checkpoint #3 as an independently-evolved
+  routing policy, not a fine-tune of checkpoint #2. Writes `reports/m6_summary.json` +
+  `checkpoints/m6_cmaes/selection_head.pt` (gitignored).
+- **`advance_m6` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**,
+  following `advance_m4`/`advance_phase_8`'s exact summary-file + tmux +
+  `gpu_spend_approved` pattern.
+- **Verification done in the sandbox, beyond a bare `py_compile` check**: this sandbox
+  has outbound network access to PyPI (installed real `pyffish` + `python-chess` +
+  `numpy` + `cma` into a throwaway venv, same as m4/m5's sessions). Ran the REAL
+  `play_one_rollout(board_factory=GardnerBoard)` end-to-end against a fake
+  `GardnerScorer` standing in for the Fairy-Stockfish subprocess: confirmed both the
+  legal-move-continuation path and the illegal-move immediate-termination/reward path
+  (`blend_reward`'s outcome-only branch when `mean_cpl` is `None`) work correctly
+  through real `pyffish`-backed legality checking, and confirmed the default
+  `board_factory=chess.Board` path is byte-for-byte unaffected (only a new optional
+  keyword was added, same call path as before). Also ran `make_dispatch_move_fn`
+  against a fake numpy-backed backbone (mirroring the fake-torch-shim technique Phase
+  7/8's sessions used for the same purpose) and confirmed different selection-head
+  weight/bias vectors genuinely route to different fake workers, not just that the
+  plumbing runs -- then ran `m6_cmaes_gardner_pilot.py`'s own
+  `make_fitness_fn`/`final_eval` against that same fake backbone through a real
+  `GardnerBoard` rollout, confirming `final_eval`'s win/loss/draw/unresolved rates sum
+  to 1.0. Also dry-run verified `advance_m6` (mocked `tmux_session_exists`/
+  `tmux_launch`) across all 4 reachable states: blocked without `gpu_spend_approved`,
+  launches once approved, does not relaunch while its tmux session is up, reports `done`
+  once the summary verdict is `COMPLETE`. Only genuinely unverifiable-from-here pieces:
+  real `torch`/GPU tensor-op correctness and actual worker-LLM inference quality
+  (already exercised by m2/m4/m5), and real Fairy-Stockfish subprocess scoring
+  (`GardnerScorer` itself already gated by m1).
+- **⚠️ GATED behind `minichess_phases["m6"].gpu_spend_approved` (left `false`)**, same
+  reasoning as m4/Phase 8's gates: this plays real Gardner Minichess blindfold games
+  against the same worker pool m2's floor check flagged `REVIEW_NEEDED` with a **0%
+  legal-move rate for all 3 default workers**
+  (`reports/m2_gardner_floor_check_summary.json`). A human/dev session should look at
+  both that report and `reports/phase8_summary.json` (confirms the
+  CMA-ES-on-blindfold-chess mechanism itself already works, on the full-chess track)
+  before approving -- per the project's evidence-based-verdict policy (2026-07-12
+  handoff note below), not a rubber-stamp flip.
+- `state.json`'s `m6` set to `status: "pending"` (NOT `"done"` -- this session has no
+  way to verify the training loop actually converges against a real backbone/GPU/engine
+  binary). Naturally blocked behind m5 in the GPU host's cron loop until m5 completes,
+  and behind its own `gpu_spend_approved` gate after that.
 
 ## Cloud dev routine additions (2026-07-13c) -- m5 Gardner Minichess SVF + SFT training
 
