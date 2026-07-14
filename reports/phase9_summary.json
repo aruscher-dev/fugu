@@ -1,0 +1,52 @@
+{
+  "games_requested": [
+    "kuhn_poker",
+    "connect_four",
+    "breakthrough"
+  ],
+  "games": {
+    "kuhn_poker": {
+      "game": "kuhn_poker",
+      "n_evolved_params": 3074,
+      "cmaes": {
+        "n_generations": 5,
+        "popsize": 4,
+        "n_games_per_eval": 4,
+        "sigma0": 0.3,
+        "best_fitness_mean_reward": 1.0,
+        "history_best": [
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          0.5
+        ],
+        "history_mean": [
+          -0.25,
+          -0.25,
+          0.125,
+          0.125,
+          -0.125
+        ]
+      },
+      "held_out_eval_vs_random_baseline": {
+        "n_games": 20,
+        "win_rate": 0.45,
+        "loss_or_illegal_rate": 0.55,
+        "draw_rate": 0.0,
+        "mean_reward": -0.1
+      },
+      "checkpoint_path": "/Data/alfred.ruscher/fugu/checkpoints/phase9_cmaes_gtbench/kuhn_poker_selection_head.pt",
+      "verdict": "COMPLETE",
+      "note": "Scoped proof-of-concept only (PLAN.md's Verification section: 'Any CMA-ES results (stretch phases) are explicitly reported as scoped proof-of-concept') -- validates that sep-CMA-ES generalizes to kuhn_poker using the same mechanism Phase 7 already validated on kuhn_poker, not a kuhn_poker-strength claim. Deliberately a smaller CMA-ES budget than Phase 7's kuhn_poker-only pilot (this phase spreads its budget across 3 games to check generalization, not to re-prove convergence on any one). Opponent is gtbench's own RandomAgent (no LLM, always legal) -- a cheap fixed baseline to validate the training loop against, not a benchmark. Evolved parameters are the selection head's weight+bias ONLY, same scoping as Phase 7/8."
+    }
+  },
+  "generated_at": "2026-07-14T07:26:35.347990+00:00",
+  "workers": [
+    "qwen2.5-7b",
+    "mistral-7b"
+  ],
+  "backbone_model_id": "Qwen/Qwen2.5-1.5B-Instruct",
+  "verdict": "PARTIAL",
+  "note": "Multi-game extension of Phase 7's kuhn_poker-only sep-CMA-ES pilot (PLAN.md phase table: 'gtbench extension (connect_four/breakthrough + kuhn_poker)') -- each game's own entry under 'games' carries its own scoped-proof-of-concept disclaimer. 'verdict' is COMPLETE only once every game in 'games_requested' has its own verdict COMPLETE."
+}
