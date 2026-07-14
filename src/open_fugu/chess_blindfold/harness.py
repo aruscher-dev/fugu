@@ -203,6 +203,7 @@ def play_blindfold_vs_engine(
     worker_id: Optional[str] = None,
     board_factory: BoardFactory = chess.Board,
     variant_description: Optional[str] = None,
+    engine_move_log: Optional[list] = None,
 ) -> GameResult:
     """Play one blindfold game: the LLM (via move_fn) against an engine baseline
     (e.g. Stockfish at a fixed skill level) that DOES see the board normally --
@@ -216,6 +217,15 @@ def play_blindfold_vs_engine(
     variant_description=GARDNER_VARIANT_DESCRIPTION alongside it -- see
     format_opening_prompt()'s docstring for why the description is required
     (not optional-nice-to-have) for any non-standard board.
+
+    engine_move_log: optional list the engine's own UCI moves get appended to,
+    in play order (including the pre-loop "first engine move" when the LLM
+    plays black) -- backward compatible, defaults to None (zero behavior
+    change for every existing caller). GameResult.plies only ever records the
+    LLM's own moves (see PlyRecord), so a caller that needs to reconstruct the
+    full board timeline ply-by-ply (e.g. m8's board animation, see
+    open_fugu.minichess.demo_render) has no other way to recover what the
+    engine actually played without this.
     """
     board = board_factory()
     for mv in opening_uci_moves:
@@ -236,6 +246,8 @@ def play_blindfold_vs_engine(
         first_engine_move = engine_best_move_fn(board)
         board.push_uci(first_engine_move)
         opening_prompt += " " + format_opponent_move_prompt(first_engine_move)
+        if engine_move_log is not None:
+            engine_move_log.append(first_engine_move)
 
     messages: List[dict] = [{"role": "user", "content": opening_prompt}]
 
@@ -261,6 +273,8 @@ def play_blindfold_vs_engine(
         mv = engine_best_move_fn(board)
         board.push_uci(mv)
         messages.append({"role": "user", "content": format_opponent_move_prompt(mv)})
+        if engine_move_log is not None:
+            engine_move_log.append(mv)
         return mv
 
     while len(board.move_stack) < max_plies + len(opening_uci_moves) and not board.is_game_over():

@@ -1,9 +1,129 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-14 (cloud dev routine -- wrote m7, the minichess track's fixed
-evaluation suite; see "Cloud dev routine additions (2026-07-14b) -- m7 Gardner fixed
-evaluation suite" below for the newest change; the rest of this doc below is otherwise as
-of the same day's earlier manual dev session on `sole`, see that section's own note).
+Last updated: 2026-07-14 (cloud dev routine -- wrote m8, the minichess track's interactive
+HTML demo, PLAN.md's own words for "the actual deliverable"; see "Cloud dev routine
+additions (2026-07-14c) -- m8 interactive HTML demo" below for the newest change; the rest
+of this doc below is otherwise as of the same day's earlier sessions, see their own notes).
+
+## Cloud dev routine additions (2026-07-14c) -- m8 interactive HTML demo
+
+Main `phase_order` track: no change this session -- every phase in it still has a status
+other than `not_started` (Phases 5/7/8/9 remain `pending`, gated behind their own
+`gpu_spend_approved` flags; Phase 5's is still `NOT approved`). `minichess_phase_order`
+track: `m8` (the interactive HTML demo -- PLAN.md's own words: "**the actual
+deliverable**": "interactive HTML demo (Claude Artifact) built from m7's logs --
+animated board, stage tabs/side-by-side across the 3 checkpoints, routing-distribution +
+ACPL charts") was the first `not_started` phase (`m0`-`m7` all already have a status
+other than `not_started`; `m4`-`m7` are themselves still `pending`, gated behind their own
+`gpu_spend_approved` flags and naturally blocking `m8` via `advance_track`'s
+first-non-done-phase ordering until `m7` completes). Wrote m8's code this session (cloud
+dev routine, no GPU/bin/fairy-stockfish access here to actually run it -- but `pyffish`
+installs standalone via pip, a pure C-extension move generator with no GPU/engine-binary
+dependency, so the board-replay half of this genuinely was verified against a real board,
+not mocked):
+
+- **New `src/open_fugu/minichess/demo_render.py`** -- `build_game_timeline()` replays one
+  m7 game record's fixed opening + interleaved LLM/engine moves through a real
+  `GardnerBoard`, producing a FEN snapshot after every ply (reused directly rather than
+  reimplementing 5x5 move application in JavaScript -- the rendered page's own JS only
+  ever needs to parse a FEN string into squares, never apply a move, a much smaller and
+  safer surface to hand-write in JS than legality/move-application would be). Also reuses
+  `open_fugu.eval.aggregate_metrics.aggregate_condition()` (Phase 6's own per-condition
+  win/draw/loss/unresolved/illegal-move-rate/ACPL/blunder-rate aggregator) directly rather
+  than reimplementing it -- already exactly the right shape for m8's per-condition stat
+  tiles. `render_html()` renders a single self-contained HTML file (inline CSS/JS, no
+  external network dependency, light+dark via `prefers-color-scheme`) with two view
+  modes: a per-checkpoint tab view (aggregate stat tiles, a routing-distribution bar
+  chart, a per-opening game picker, and step/play/scrub board animation with a per-ply
+  info panel showing routing choice/move/legality/ACPL/blunder flag/the LLM's actual raw
+  blindfold reply) and a side-by-side view (all 3 coordination checkpoints replaying the
+  SAME fixed opening in lockstep, with shared step controls) -- covers every element
+  PLAN.md's m8 row asks for (animated board; stage tabs; side-by-side comparison;
+  routing-distribution + ACPL charts; step/play controls).
+- **New `scripts/m8_build_minichess_demo.py`** -- the CLI: reads
+  `reports/minichess_demo/<condition>.json` (m7's tracked, per-condition per-game
+  records), calls `demo_render.build_demo_data()`/`render_html()`, writes
+  `reports/minichess_demo/index.html` (tracked) + `reports/m8_summary.json` (verdict
+  marker, mirroring `phase6_eval_report.py`'s `load_conditions()`/verdict-from-upstream-
+  summary structure).
+- **`advance_m8` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`** -- runs
+  **synchronously** (no `tmux`, **no `gpu_spend_approved` gate of its own**), same
+  reasoning as `advance_phase_6`/`advance_phase_4_5`: pure JSON + `pyffish` replay over
+  data `m7`'s own gate already approved collecting, no GPU/model/`bin/fairy-stockfish`
+  access needed at all (`GardnerBoard`'s replay needs only `pyffish`, unlike
+  `GardnerScorer`, which needs the engine binary for search). Blocks until
+  `minichess_phases["m7"].status == "done"`, same "don't build a misleading demo from
+  partial data" reasoning `advance_phase_6` already uses for Phase 5.
+- **Found and fixed a real gap while wiring this up**: `harness.GameResult.plies` only
+  ever records the LLM's **own** moves (see `harness.py`'s `llm_turn()`) -- the engine's
+  replies are pushed onto the board and never recorded anywhere in the returned result.
+  m7's per-game JSON (despite its own module docstring's "full move-by-move data" claim)
+  therefore had no way to reconstruct the board position after the engine's turns, only
+  after the LLM's -- which makes full-game board animation impossible from m7's data as
+  originally written (only the very final position, `final_fen`, was recoverable in
+  between LLM-only snapshots). Fixed at the source, following the exact
+  optional-backward-compatible-parameter pattern this session's own `routing_log`/
+  `board_factory` precedents already established: **`harness.play_blindfold_vs_engine`
+  gained an optional `engine_move_log=` parameter** (defaults to `None`, zero behavior
+  change for every existing caller -- all four call sites across the codebase use keyword
+  args, confirmed before adding a new trailing optional param) that appends each engine
+  move in real play order, including the pre-loop "first engine move" case when the LLM
+  plays black. `m7_gardner_fixed_eval_suite.py`'s `play_one_game()` now passes
+  `engine_move_log=engine_moves` and stores it in each returned game dict as
+  `"engine_moves"` (also added to `crashed_game_record()`'s dict for schema consistency).
+  **Safe to change now, not a retroactive break**: `m7` itself is still
+  `minichess_phases["m7"].status == "pending"` (code written, never yet executed on a GPU
+  host), so this costs zero real GPU-hours/re-collection -- the exact same "found a real
+  bug in not-yet-executed code while building the next phase, fix it before it costs
+  anything" precedent the m6→m7 session already set for the missing `svf_z` checkpoint
+  key (see the "Cloud dev routine additions (2026-07-14b)" section below).
+- **Verification done in the sandbox, well beyond a bare `py_compile` check**: this
+  sandbox can `pip install pyffish` standalone (no GPU/engine-binary/torch dependency at
+  all for the pure move-generator) -- built synthetic m7-shaped game records whose
+  "legal" moves are genuinely pulled from `GardnerBoard.legal_moves_uci()` at each exact
+  position (not hand-waved UCI strings), covering a normal multi-ply game, an
+  illegal-move-terminated game, and a crashed (empty-`plies`) game, then ran
+  `build_game_timeline()`/`build_demo_data()`/`render_html()` against them end to end --
+  confirmed every frame's FEN has the correct 5-rank shape (`.split("/")` has exactly 4
+  slashes) across all three game shapes. **Also loaded the actual rendered HTML output in
+  a real headless Chromium** (Playwright, pre-installed in this sandbox at
+  `/opt/pw-browsers/chromium`) under both light and dark `color-scheme` emulation: zero
+  JS console/page errors; the board renders the correct pieces at every step (verified via
+  screenshot, not just "didn't throw"); tab switching, the per-opening game picker,
+  stepping forward through plies (confirmed the ply-info panel and raw-reply text update
+  correctly), and the side-by-side view (including a condition with no game for the
+  selected opening rendering a clean "no data" placeholder instead of crashing) were all
+  interacted with via real Playwright clicks, not just static-rendered. **Also dry-run
+  verified `advance_m8` in `orchestrate.py`** (mocked `subprocess.run`, no real `tmux`
+  needed since this advancer never launches one) across all 5 reachable states: blocked
+  while `m7` isn't `done`; builds and reports `done` on a `COMPLETE` verdict; reports
+  `done` again without re-invoking the build script once already `COMPLETE`; reports
+  `blocked` on a nonzero build-script returncode; reports `in_progress` on a `PARTIAL`
+  verdict. Only genuinely unverifiable-from-here piece, and a real one worth flagging:
+  **all of the above was verified against SYNTHETIC data**, since `m4`/`m5`/`m6`/`m7`
+  haven't executed on a GPU host yet (`m4`'s `gpu_spend_approved` is `false`, and `m5`-`m7`
+  are naturally blocked behind it) -- `reports/minichess_demo/*.json` do not exist in this
+  repo yet, so `advance_m8` will correctly report `"blocked"` every cron tick until `m7`
+  reaches `"done"` for real. A future session (or this same, unmodified script, once the
+  GPU host's cron reaches it) should sanity-check the *real* rendered demo once that data
+  exists -- long real `raw_reply` text (especially `deepseek-r1-distill-qwen-7b`'s
+  `<think>` blocks, which this session's synthetic fixtures only approximated with a
+  short repeated string) or an unanticipated real FEN/game-termination edge case in
+  actual self-play could behave differently than the hand-constructed fixtures used here,
+  even though the replay *mechanism* itself (real `pyffish`-backed `GardnerBoard`) is the
+  same code path either way.
+- `state.json`'s `m8` set to `status: "pending"` (**NOT** `"done"` -- this session has no
+  way to verify the demo against real m7 data, since none exists yet). Naturally blocked
+  behind `m4`→`m5`→`m6`→`m7` in the GPU host's cron loop via `advance_track`'s
+  first-non-done-phase ordering; once `m7` reaches `done` for real, the very next cron
+  tick will build the real demo with zero further code changes needed.
+- **This completes every phase currently defined in `minichess_phase_order`** (`m0`
+  through `m8`) -- there is no `m9` or further minichess milestone in PLAN.md at this
+  time. The remaining work on this track is entirely GPU-host execution (`m4` through
+  `m8`, each still gated/blocked as described above and in their own `state.json` notes),
+  not further cloud-dev-routine code-writing, unless a future session's investigation into
+  `m2`'s `REVIEW_NEEDED` 0%-legal-move-rate verdict (see the 2026-07-14 manual dev-session
+  section below) changes the plan.
 
 ## Cloud dev routine additions (2026-07-14b) -- m7 Gardner fixed evaluation suite
 

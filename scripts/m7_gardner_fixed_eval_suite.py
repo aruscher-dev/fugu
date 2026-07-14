@@ -51,6 +51,17 @@ play_blindfold_vs_engine only ever sets from a single fixed `worker_id=`
 argument for the whole game -- correct for a solo worker, not expressive
 enough for a per-query router whose choice can change every ply.
 
+Each game record also captures "engine_moves" -- the engine's own played
+moves, in play order -- via harness.play_blindfold_vs_engine's new
+`engine_move_log` parameter (added alongside this file's own m8 session,
+optional/backward-compatible, defaults to None). Found while building m8
+(the interactive HTML demo this file's own module docstring already
+promises "full move-by-move data" to): GameResult.plies only ever records
+the LLM's own moves, never the engine's, so a consumer replaying the game
+ply-by-ply for a board animation had no way to reconstruct the position
+after the engine's turns without this -- see
+open_fugu.minichess.demo_render.replay_fens.
+
 GATED behind minichess_phases["m7"].gpu_spend_approved (see
 scripts/orchestrate.py's advance_m7): plays real games against the same
 3-worker pool m2's floor check flagged REVIEW_NEEDED (0% legal-move rate for
@@ -147,6 +158,7 @@ def write_condition_games(condition_path: Path, games_by_opening: dict) -> None:
 def play_one_game(condition: str, opening_name: str, opening_moves: list, llm_color: bool,
                    move_fn_factory, scorer_depth: int) -> dict:
     routing_log: list = []
+    engine_moves: list = []
     move_fn = move_fn_factory(routing_log)
     scorer = GardnerScorer(depth=scorer_depth)
     try:
@@ -159,6 +171,7 @@ def play_one_game(condition: str, opening_name: str, opening_moves: list, llm_co
             max_plies=MAX_PLIES,
             board_factory=GardnerBoard,
             variant_description=GARDNER_VARIANT_DESCRIPTION,
+            engine_move_log=engine_moves,
         )
     finally:
         scorer.close()
@@ -188,6 +201,14 @@ def play_one_game(condition: str, opening_name: str, opening_moves: list, llm_co
         "legal_move_rate": (len(legal_plies) / len(result.plies)) if result.plies else None,
         "mean_acpl": (sum(losses) / len(losses)) if losses else None,
         "blunder_rate": (sum(p.is_blunder for p in legal_plies) / len(legal_plies)) if legal_plies else None,
+        # The engine's own played moves, in play order (including a possible
+        # pre-loop reply when the LLM plays black) -- harness.GameResult.plies
+        # only ever records the LLM's own moves, so without this m8's board
+        # animation (open_fugu.minichess.demo_render) would have no way to
+        # reconstruct the position after each of the engine's turns, only
+        # after the LLM's. Captured via harness.play_blindfold_vs_engine's
+        # engine_move_log= parameter (added this session for exactly this).
+        "engine_moves": engine_moves,
         "plies": [
             {
                 "ply": p.ply,
@@ -219,6 +240,7 @@ def crashed_game_record(condition: str, opening_name: str, opening_moves: list, 
         "legal_move_rate": None,
         "mean_acpl": None,
         "blunder_rate": None,
+        "engine_moves": [],
         "plies": [],
     }
 

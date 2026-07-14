@@ -1169,6 +1169,60 @@ def advance_m7(state: dict) -> str:
     return "in_progress"
 
 
+def advance_m8(state: dict) -> str:
+    """m8: build the interactive HTML demo (PLAN.md's minichess phase table:
+    "the actual deliverable" -- animated board, stage tabs/side-by-side
+    comparison across the 3 coordination checkpoints, routing-distribution +
+    ACPL charts, step/play controls). Pure aggregation/rendering over m7's
+    already-written, tracked per-condition game records
+    (reports/minichess_demo/<condition>.json) -- no GPU/model access needed,
+    so like Phase 6/advance_phase_4_5 this carries no gpu_spend_approved gate
+    and runs synchronously (no tmux): it only ever reads data a dev session
+    already approved collecting (m7's own gpu_spend_approved gate), and
+    open_fugu.minichess.demo_render's board replay needs only `pyffish`
+    (already installed for m0-m7 on this host), not bin/fairy-stockfish or
+    the GPU.
+
+    Blocks until m7 itself is fully done (state.json minichess_phases["m7"]
+    == "done", i.e. reports/m7_summary.json's own verdict is COMPLETE) --
+    a demo built from an in-progress m7 run would misrepresent the
+    comparison as more complete than it is, even though
+    scripts/m8_build_minichess_demo.py itself is capable of writing a
+    PARTIAL one (see its own verdict handling) if invoked manually before
+    that, same reasoning advance_phase_6's docstring gives for its own
+    identical block-until-done check."""
+    summary_path = REPORTS_DIR / "m8_summary.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+
+    if state["minichess_phases"].get("m7", {}).get("status") != "done":
+        print("[orchestrate] m8 waiting on m7 to finish (reports/m7_summary.json not yet "
+              "verdict=COMPLETE) -- a demo built from partial move-by-move data would be a "
+              "misleading final deliverable.")
+        return "blocked"
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.chmod(0o700)
+    log_path = LOG_DIR / "m8_build_minichess_demo.log"
+    result = subprocess.run(
+        [VENV_PYTHON, str(PROJECT_DIR / "scripts" / "m8_build_minichess_demo.py")],
+        cwd=PROJECT_DIR, capture_output=True, text=True,
+    )
+    log_path.write_text(result.stdout + result.stderr)
+    log_path.chmod(0o600)
+    if result.returncode != 0:
+        print(f"[orchestrate] m8 demo build failed (see {log_path})")
+        return "blocked"
+
+    summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
+    if summary.get("verdict") == "COMPLETE":
+        return "done"
+    print(f"[orchestrate] m8 demo build verdict='{summary.get('verdict')}' (not COMPLETE yet)")
+    return "in_progress"
+
+
 MINICHESS_PHASE_ADVANCERS = {
     "m0": advance_m0,
     "m1": advance_m1,
@@ -1178,6 +1232,7 @@ MINICHESS_PHASE_ADVANCERS = {
     "m5": advance_m5,
     "m6": advance_m6,
     "m7": advance_m7,
+    "m8": advance_m8,
 }
 
 
