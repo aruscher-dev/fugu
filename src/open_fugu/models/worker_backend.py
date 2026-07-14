@@ -91,3 +91,49 @@ class OrchestratorBackbone(nn.Module):
         hidden_states = self.backbone.model(**inputs).last_hidden_state
         last_token_hidden = hidden_states[0, -1, :].to(torch.float32)
         return self.selection_head(last_token_hidden)
+
+
+def load_from_checkpoint(checkpoint_path, available_worker_ids: List[str], device: str = "cuda:0") -> "OrchestratorBackbone":
+    """Loads a trained OrchestratorBackbone from a checkpoint file, shared by
+    every caller that needs to go from "path on disk" to "backbone ready to
+    forward() prompts through": a2a.orchestrator_agent.FuguSelectionDispatch
+    (real A2A per-query dispatch, Phase 5+) and m7's in-process fixed eval
+    suite (checkpoints/m5_sft/backbone_head_svf.pt and
+    checkpoints/m6_cmaes/selection_head.pt) both need the exact same
+    load-and-wire-up logic. Previously duplicated inline in
+    FuguSelectionDispatch.__init__ before m7's session factored it out here.
+
+    Two checkpoint shapes exist: train_sft.py's (Phase 4/m5, SFT-trained --
+    "selection_head", "worker_ids", "backbone_model_id", "svf_n_last_layers",
+    "svf_z") and train_cmaes.py-driven pilots' (Phase 8/m6/m7's own
+    "m6_cmaes" condition -- same keys but WITHOUT "svf_z", since CMA-ES only
+    evolves the selection head and leaves SVF's `z` frozen at its
+    freshly-constructed no-op default). "svf_z" is loaded only if present --
+    a freshly-constructed OrchestratorBackbone already has the right no-op
+    `z` values otherwise, so omitting it is not an error.
+    """
+    import torch
+
+    state = torch.load(checkpoint_path, map_location=device)
+    checkpoint_worker_ids = state["worker_ids"]
+    missing = [w for w in checkpoint_worker_ids if w not in available_worker_ids]
+    if missing:
+        raise ValueError(
+            f"Checkpoint at {checkpoint_path} expects worker(s) {missing} but only "
+            f"{list(available_worker_ids)} are available -- the selection head's output "
+            f"order/size is fixed at training time (see OrchestratorBackboneConfig.worker_ids)."
+        )
+
+    config = OrchestratorBackboneConfig(
+        worker_ids=checkpoint_worker_ids,
+        backbone_model_id=state["backbone_model_id"],
+        svf_n_last_layers=state["svf_n_last_layers"],
+        device=device,
+    )
+    backbone = OrchestratorBackbone(config)
+    backbone.selection_head.load_state_dict(state["selection_head"])
+    if "svf_z" in state:
+        for module, z in zip(backbone.svf_linears, state["svf_z"]):
+            module.z.data = z.to(device=module.z.device, dtype=module.z.dtype)
+    backbone.eval()
+    return backbone

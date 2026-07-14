@@ -259,6 +259,14 @@ def main():
     checkpoint_path = CHECKPOINT_DIR / "selection_head.pt"
     torch.save({
         "selection_head": backbone.selection_head.state_dict(),
+        # SVF's z is frozen at its no-op default throughout this run (see
+        # module docstring -- only the selection head is evolved), but saved
+        # anyway for shape-consistency with m5/Phase 4's SFT checkpoints:
+        # m7's fixed eval suite loads all three coordination checkpoints
+        # through the same open_fugu.models.worker_backend.load_from_checkpoint
+        # (which tolerates this key's absence, but writing it here means this
+        # checkpoint is never the special case).
+        "svf_z": [m.z.detach().cpu() for m in backbone.svf_linears],
         "worker_ids": args.workers,
         "backbone_model_id": args.backbone_model_id,
         "svf_n_last_layers": args.svf_n_last_layers,

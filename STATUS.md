@@ -1,10 +1,123 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-14 (manual dev session on `sole`, real GPU access -- re-ran m2's
-floor check and found/fixed a real board-variant-confusion bug, see "Manual dev-session
-fixes (2026-07-14) -- m2 re-run, generation-budget + variant-blindness fixes" below for
-the newest change; the rest of this doc below is otherwise as of the same day's earlier
-cloud dev routine session, see that section's own note).
+Last updated: 2026-07-14 (cloud dev routine -- wrote m7, the minichess track's fixed
+evaluation suite; see "Cloud dev routine additions (2026-07-14b) -- m7 Gardner fixed
+evaluation suite" below for the newest change; the rest of this doc below is otherwise as
+of the same day's earlier manual dev session on `sole`, see that section's own note).
+
+## Cloud dev routine additions (2026-07-14b) -- m7 Gardner fixed evaluation suite
+
+Main `phase_order` track: no change this session -- every phase in it still has a status
+other than `not_started` (Phases 5/7/8/9 remain `pending`, gated behind their own
+`gpu_spend_approved` flags; Phase 5's is still `NOT approved`). `minichess_phase_order`
+track: `m7` (fixed evaluation suite -- PLAN.md's minichess phase table: "run all 3
+checkpoints (m3 random / m5 SFT / m6 CMA-ES) through the same fixed set of
+openings/positions, log full move-by-move data ... to `reports/minichess_demo/*.json`")
+was the first `not_started` phase (`m0`-`m6` all already have a status other than
+`not_started`; `m5`/`m6` are themselves still `pending`, gated behind their own
+`gpu_spend_approved` flags and naturally blocking `m7` via `advance_track`'s
+first-non-done-phase ordering until they complete). Wrote m7's code this session (cloud
+dev routine, no GPU/`pyffish`/`bin/fairy-stockfish` access here to actually run it):
+
+- **New `scripts/m7_gardner_fixed_eval_suite.py`** -- plays all 3 of this track's
+  coordination checkpoints (`m3` random-routing / `m5` SFT-routed / `m6` CMA-ES-routed)
+  through the SAME 4 fixed openings (`scripts/m2_gardner_floor_check.py`'s
+  already-hand-verified `GARDNER_OPENING_BOOK`, reused verbatim -- same convention m3/m6
+  already established for this constant), one game per opening per condition (12 games
+  total), **in-process** via `open_fugu.train.rollout_chess` (the same machinery m6's
+  CMA-ES pilot already validated against real `GardnerBoard`/`GardnerScorer` rollouts)
+  rather than over A2A like Phase 5's per-condition-subprocess approach -- all 3
+  conditions here share the exact same worker pool weights, so loading it once and
+  reusing it across conditions avoids paying A2A's per-condition process-startup cost 3x
+  for no benefit (same "stay in-process" reasoning Phase 7/8/m6 already gave).
+- **`open_fugu.train.rollout_chess.make_dispatch_move_fn` gained an optional
+  `routing_log=` parameter** (backward compatible, defaults to `None`, zero behavior
+  change for Phase 8/m6's existing calls) -- appends the chosen worker's `short_id` on
+  every call, in the same order the resulting `harness.GameResult.plies` grows. Needed
+  because `harness.PlyRecord.worker_id` alone isn't expressive enough for a per-query
+  router: `play_blindfold_vs_engine` only ever sets it from one fixed `worker_id=`
+  argument for the whole game (correct for a solo worker, wrong the moment routing can
+  change every ply) -- m7 zips `routing_log` against `result.plies` by index instead,
+  to get the REAL per-ply routing choice PLAN.md's move-by-move log format asks for.
+- **New `open_fugu.train.rollout_chess.make_sticky_random_move_fn`** -- an in-process
+  twin of `a2a.orchestrator_agent.RandomStickyDispatch`'s per-game policy (pick one
+  worker at random per game, stick with it for every subsequent turn), used for m7's
+  `m3_random` condition. m3 itself never produced a checkpoint file (it only proved the
+  A2A pipeline runs end-to-end on this board size, gated on smoke-test `returncode` not
+  chess quality per its own note) -- this replays that SAME routing policy directly
+  instead of loading a file that was never meant to exist.
+- **Found and fixed a real latent bug while wiring this up**: m6's checkpoint
+  (`checkpoints/m6_cmaes/selection_head.pt`) never saved an `"svf_z"` key (CMA-ES only
+  evolves the selection head, leaves SVF frozen at its no-op default), while
+  `a2a/orchestrator_agent.py`'s `FuguSelectionDispatch.__init__` unconditionally indexed
+  `state["svf_z"]` -- would have raised `KeyError` the moment anything tried to load m6's
+  checkpoint through that path. Never caught before now since m6 has not actually run on
+  a GPU host yet (no real checkpoint has ever existed to trigger it) -- m7 needing to load
+  BOTH m5's checkpoint (has `svf_z`) and m6's (didn't) through the same code path is what
+  surfaced it. Fixed two ways:
+  1. Factored the checkpoint-loading logic out of `FuguSelectionDispatch.__init__` into a
+     new shared **`open_fugu.models.worker_backend.load_from_checkpoint(checkpoint_path,
+     available_worker_ids, device)`** -- used by both `FuguSelectionDispatch` (Phase 5+,
+     behavior unchanged for its own always-has-`svf_z` SFT checkpoints) and m7's own
+     `m5_sft`/`m6_cmaes` conditions. Only loads `"svf_z"` if the key is present -- a
+     freshly-constructed `OrchestratorBackbone` already has the correct no-op `z`
+     otherwise, so omitting it is not an error.
+  2. `scripts/m6_cmaes_gardner_pilot.py`'s own checkpoint save now also writes `"svf_z"`
+     (the already-no-op values) for shape-consistency with m5/Phase 4's checkpoints, so
+     this is never the special case in practice either, going forward.
+  - **NOTE for a future session**: Phase 8's own analogous full-chess CMA-ES checkpoint
+    (`checkpoints/phase8_cmaes/selection_head.pt`) has the identical gap (no `"svf_z"`)
+    and was **NOT** touched this session -- out of scope for a minichess-track run, and
+    nothing in the main `phase_order` currently loads it this way (no
+    Phase-8-fixed-eval-suite phase exists yet). A future session extending that track the
+    same way m7 does here should apply the same fix to
+    `scripts/phase8_cmaes_chess_pilot.py`'s checkpoint save.
+- **`advance_m7` registered in `orchestrate.py`'s `MINICHESS_PHASE_ADVANCERS`**, following
+  `advance_m4`/`advance_m6`'s summary-file + tmux + `gpu_spend_approved` pattern.
+- **Verification done in the sandbox, well beyond a bare `py_compile` check**: installed
+  real `pyffish` + `python-chess` + `numpy` into a throwaway venv (outbound PyPI access,
+  same as every earlier minichess-track session) and (1) unit-tested
+  `make_sticky_random_move_fn`/`make_dispatch_move_fn`'s new `routing_log` parameter
+  against fake worker pools -- confirmed it records exactly one entry per `move_fn` call,
+  in order, with the correct `short_id`, correct game-long stickiness for the random
+  condition, and that omitting `routing_log` (Phase 8/m6's existing call sites) is
+  unaffected; (2) ran the REAL `play_blindfold_vs_engine(board_factory=GardnerBoard)`
+  end-to-end with a fake move_fn/scorer and confirmed `routing_log`'s length always
+  matches `result.plies`' length, and that the zip-by-index correlation m7 relies on
+  produces the right per-ply `worker_id`; (3) ran `m7_gardner_fixed_eval_suite.py`'s own
+  `play_one_game`/`crashed_game_record` against a real `GardnerBoard` + fake
+  scorer/workers (module-level `GardnerScorer` import stubbed, since instantiating the
+  real one needs `bin/fairy-stockfish`, not this session's `--variant` under test) --
+  confirmed a normal game's per-ply `worker_id`s come from the real routing policy (not
+  a placeholder), and that a mid-game exception is caught and recorded as a well-formed
+  "crashed" game record rather than taking down the whole run; (4) built a fake
+  `torch`/`torch.nn`/`transformers` shim (mirroring the fake-torch-shim technique
+  Phase 7/8/m6's sessions already used in this repo) and ran
+  `worker_backend.load_from_checkpoint` against fake checkpoint dicts both WITH and
+  WITHOUT an `"svf_z"` key -- confirmed both load correctly (the WITHOUT case being the
+  exact m6 bug this session's fix addresses), and that a missing required worker raises
+  `ValueError` rather than silently mis-routing. Also dry-run verified `advance_m7`
+  (mocked `tmux_session_exists`/`tmux_launch`) across all 4 reachable states: blocked
+  without `gpu_spend_approved`, launches once approved, no relaunch while its tmux
+  session is up, `done` once verdict `COMPLETE`. Only genuinely unverifiable-from-here
+  pieces: real `torch`/GPU tensor-op correctness and actual worker-LLM inference quality
+  (already exercised by m2/m4/m5/m6), and real Fairy-Stockfish subprocess scoring
+  (`GardnerScorer` itself already gated by m1).
+- **⚠️ GATED behind `minichess_phases["m7"].gpu_spend_approved` (left `false`)**, same
+  reasoning as m4/m6's gates -- unlike m3 (pipeline-wiring only, gated on smoke-test
+  `returncode` not chess quality), m7's whole purpose is measuring chess-routing quality
+  across checkpoints, so it follows m4/m6's chess-quality-dependent-GPU-spend gating
+  precedent instead of m3's ungated one. The spend itself is modest (12 games total, much
+  smaller than m4's 4,800-sample collection or m6's many-generation CMA-ES training) but
+  the gate exists for consistency with that reasoning, not sheer cost -- a human/dev
+  session should look at `reports/m2_gardner_floor_check_summary.json` (and, once they
+  exist, `reports/m5_summary.json`/`reports/m6_summary.json`) before approving. Naturally
+  blocked until both m5 and m6 reach `done` by `advance_track`'s own phase ordering
+  regardless of this flag.
+- `state.json`'s `m7` set to `status: "pending"` (NOT `"done"` -- this session has no way
+  to verify any of this against a real backbone/GPU/engine binary/worker pool). Blocked
+  behind m5/m6 in the GPU host's cron loop until both complete, and behind its own
+  `gpu_spend_approved` gate after that.
 
 ## Manual dev-session fixes (2026-07-14) -- m2 re-run, generation-budget + variant-blindness fixes
 

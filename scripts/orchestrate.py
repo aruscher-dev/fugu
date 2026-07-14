@@ -1101,6 +1101,74 @@ def advance_m6(state: dict) -> str:
     return "in_progress"
 
 
+def advance_m7(state: dict) -> str:
+    """m7: fixed evaluation suite on 5x5 Gardner Minichess (PLAN.md's
+    minichess phase table: "run all 3 checkpoints (m3 random / m5 SFT / m6
+    CMA-ES) through the same fixed set of openings/positions, log full
+    move-by-move data ... to reports/minichess_demo/*.json"). Plays 12 real
+    games in-process (open_fugu.train.rollout_chess.make_dispatch_move_fn /
+    make_sticky_random_move_fn, both gained a `routing_log` parameter this
+    session so this phase can record which worker each ply actually routed
+    to) comparing all three of this track's coordination checkpoints over
+    the same fixed opening book -- this IS m8's data source (the interactive
+    HTML demo), so unlike Phase 6's aggregation-only report, m7 writes its
+    full per-game/per-ply records straight to reports/minichess_demo/
+    (tracked, per PLAN.md's own instruction) rather than a gitignored logs/
+    directory, so a future GPU-less session can build m8 directly from it.
+
+    Naturally blocked until both m5 and m6 reach "done" by advance_track's
+    own first-non-done-phase ordering (m7 is the phase immediately after m6
+    in minichess_phase_order) -- no separate file-existence check needed
+    here to decide whether to launch, though m7_gardner_fixed_eval_suite.py
+    itself still checks defensively in case it's ever run standalone.
+
+    GATED behind minichess_phases["m7"].gpu_spend_approved, same reasoning
+    as m4/m6's gates: this plays real Gardner Minichess blindfold games
+    against the same 3-worker pool m2's floor check flagged REVIEW_NEEDED
+    (0% legal-move rate for all 3 default workers) -- unlike m3 (pipeline-
+    wiring only, gated on smoke-test returncode not chess quality), m7's
+    whole purpose is measuring chess-routing quality across checkpoints, so
+    it follows m4/m6's chess-quality-dependent-GPU-spend gating precedent
+    instead of m3's. The spend itself is modest (12 games total, much
+    smaller than m4's 4,800-sample collection or m6's many-generation CMA-ES
+    training) but the gate exists for consistency with that reasoning, not
+    sheer cost -- a human/dev session should look at
+    reports/m2_gardner_floor_check_summary.json (and, once they exist,
+    reports/m5_summary.json/reports/m6_summary.json) before approving."""
+    summary_path = REPORTS_DIR / "m7_summary.json"
+    session = f"{TMUX_SESSION_PREFIX}_m7_gardner_fixed_eval"
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        if summary.get("verdict") == "COMPLETE":
+            return "done"
+
+    if tmux_session_exists(session):
+        print(f"[orchestrate] m7 fixed eval suite still running in tmux session '{session}'")
+        return "in_progress"
+
+    if not state["minichess_phases"].get("m7", {}).get("gpu_spend_approved"):
+        print("[orchestrate] m7 BLOCKED pending human/dev-session sign-off: this plays real Gardner "
+              "Minichess blindfold games (12, across all 3 coordination checkpoints) against the same "
+              "worker pool m2's floor check flagged REVIEW_NEEDED (0% legal-move rate for all 3 "
+              "default workers, see reports/m2_gardner_floor_check_summary.json). Set "
+              "minichess_phases[\"m7\"].gpu_spend_approved = true in state.json once reviewed (see "
+              "STATUS.md) to let this launch.")
+        return "blocked"
+
+    # Not running and not complete, and approved -- (re)launch. The underlying
+    # script is per-condition/per-opening resumable (writes
+    # reports/minichess_demo/<condition>.json after every game, skips
+    # openings already recorded on relaunch), same discipline as m4.
+    log_path = LOG_DIR / "m7_gardner_fixed_eval_suite.log"
+    cmd = (
+        f"cd {PROJECT_DIR} && HF_HOME=/Data/.hf_cache HF_HUB_DISABLE_XET=1 {VENV_PYTHON} "
+        f"scripts/m7_gardner_fixed_eval_suite.py >> {log_path} 2>&1"
+    )
+    tmux_launch(session, cmd)
+    return "in_progress"
+
+
 MINICHESS_PHASE_ADVANCERS = {
     "m0": advance_m0,
     "m1": advance_m1,
@@ -1109,6 +1177,7 @@ MINICHESS_PHASE_ADVANCERS = {
     "m4": advance_m4,
     "m5": advance_m5,
     "m6": advance_m6,
+    "m7": advance_m7,
 }
 
 

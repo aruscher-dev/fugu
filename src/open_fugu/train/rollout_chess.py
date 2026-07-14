@@ -109,7 +109,8 @@ class RoutingHistoryTracker:
         return format_opening_prompt(color or "white", moves)
 
 
-def make_dispatch_move_fn(backbone, worker_pool: Dict[str, "object"], max_new_tokens: int = 200):
+def make_dispatch_move_fn(backbone, worker_pool: Dict[str, "object"], max_new_tokens: int = 200,
+                           routing_log: Optional[List[str]] = None):
     """Returns a synchronous harness.MoveFn performing real per-query Fugu
     routing in-process: reconstructs the routing prompt (RoutingHistoryTracker,
     above), runs backbone.forward() under torch.no_grad(), argmaxes to pick
@@ -121,6 +122,13 @@ def make_dispatch_move_fn(backbone, worker_pool: Dict[str, "object"], max_new_to
     design a2a.orchestrator_agent.FuguSelectionDispatch uses for real A2A
     dispatch, so a CMA-ES-evolved selection head is evaluated against the
     same dispatch mechanics that would actually run in production.
+
+    `routing_log`, if given, gets the chosen short_id appended on every call
+    (same order as the caller's resulting harness.GameResult.plies, one
+    entry per LLM ply) -- Phase 8/m6's fitness functions don't pass this
+    (they only need the aggregate reward), but m7's fixed eval suite does,
+    to record which worker each ply actually routed to for its move-by-move
+    demo logs. Defaults to None so every existing caller is unaffected.
     """
     import torch
 
@@ -131,8 +139,36 @@ def make_dispatch_move_fn(backbone, worker_pool: Dict[str, "object"], max_new_to
         with torch.no_grad():
             logits = backbone.forward(prompt)
         short_id = backbone.config.worker_ids[int(torch.argmax(logits).item())]
+        if routing_log is not None:
+            routing_log.append(short_id)
         worker = worker_pool[short_id]
         return worker.generate([{"role": "user", "content": prompt}], max_new_tokens=max_new_tokens)
+
+    return move_fn
+
+
+def make_sticky_random_move_fn(worker_pool: Dict[str, "object"], rng, max_new_tokens: int = 200,
+                                routing_log: Optional[List[str]] = None):
+    """In-process twin of a2a.orchestrator_agent.RandomStickyDispatch's
+    per-game policy (pick one worker at random per game and stick with it
+    for every subsequent turn) -- used by m7's 'm3_random' condition to
+    replay that same coordination checkpoint's routing behavior without
+    paying A2A's per-condition process-startup cost (same reasoning
+    make_dispatch_move_fn's own docstring gives for staying in-process here).
+    Unlike RandomStickyDispatch (keyed by ctx_id across separate per-context
+    A2A calls), this closure already has the whole game's move_fn lifetime
+    to itself, so "stick with it" is just a plain closure variable rather
+    than a ctx_id-keyed dict.
+    """
+    chosen: Dict[str, Optional[str]] = {"worker_id": None}
+
+    def move_fn(messages: List[dict]) -> str:
+        if chosen["worker_id"] is None:
+            chosen["worker_id"] = rng.choice(list(worker_pool))
+        short_id = chosen["worker_id"]
+        if routing_log is not None:
+            routing_log.append(short_id)
+        return worker_pool[short_id].generate(messages, max_new_tokens=max_new_tokens)
 
     return move_fn
 

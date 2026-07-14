@@ -134,33 +134,18 @@ class FuguSelectionDispatch:
     """
 
     def __init__(self, worker_urls: dict[str, str], checkpoint_path: str, device: str = "cuda:0"):
-        import torch
+        from open_fugu.models.worker_backend import load_from_checkpoint
 
-        from open_fugu.models.worker_backend import OrchestratorBackbone, OrchestratorBackboneConfig
-
-        state = torch.load(checkpoint_path, map_location=device)
-        checkpoint_worker_ids = state["worker_ids"]
-        missing = [w for w in checkpoint_worker_ids if w not in worker_urls]
-        if missing:
-            raise ValueError(
-                f"Checkpoint at {checkpoint_path} expects worker(s) {missing} but --workers only "
-                f"provided {list(worker_urls)} -- the selection head's output order/size is fixed "
-                f"at training time (see worker_backend.OrchestratorBackboneConfig.worker_ids)."
-            )
-
+        # load_from_checkpoint (models/worker_backend.py) also loads
+        # "svf_z" when present -- factored out this session (m7) since m7's
+        # in-process fixed eval suite needs the exact same load-and-wire-up
+        # logic for checkpoints that DON'T have "svf_z" (m6's CMA-ES
+        # checkpoint, which never touches SVF), a case this class's own
+        # checkpoint (Phase 4/5's SFT-trained one, which always has it) never
+        # exercised before.
+        self.backbone = load_from_checkpoint(checkpoint_path, list(worker_urls), device=device)
         self.worker_urls = worker_urls
-        self.worker_ids = checkpoint_worker_ids
-        config = OrchestratorBackboneConfig(
-            worker_ids=checkpoint_worker_ids,
-            backbone_model_id=state["backbone_model_id"],
-            svf_n_last_layers=state["svf_n_last_layers"],
-            device=device,
-        )
-        self.backbone = OrchestratorBackbone(config)
-        self.backbone.selection_head.load_state_dict(state["selection_head"])
-        for module, z in zip(self.backbone.svf_linears, state["svf_z"]):
-            module.z.data = z.to(device=module.z.device, dtype=module.z.dtype)
-        self.backbone.eval()
+        self.worker_ids = self.backbone.config.worker_ids
 
         self.ctx_state: dict[str, dict] = {}  # ctx_id -> {"color": str|None, "moves": [uci, ...]}
 
