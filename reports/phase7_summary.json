@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-07-14T07:21:37.846344+00:00",
+  "game": "kuhn_poker",
+  "workers": [
+    "qwen2.5-7b",
+    "mistral-7b"
+  ],
+  "backbone_model_id": "Qwen/Qwen2.5-1.5B-Instruct",
+  "n_evolved_params": 3074,
+  "cmaes": {
+    "n_generations": 8,
+    "popsize": 6,
+    "n_games_per_eval": 6,
+    "sigma0": 0.3,
+    "best_fitness_mean_reward": 1.0,
+    "history_best": [
+      0.6666666666666666,
+      0.6666666666666666,
+      1.0,
+      0.0,
+      0.6666666666666666,
+      0.0,
+      0.6666666666666666,
+      0.6666666666666666
+    ],
+    "history_mean": [
+      -0.16666666666666666,
+      0.27777777777777773,
+      0.2222222222222222,
+      -0.16666666666666666,
+      0.05555555555555555,
+      -0.4444444444444444,
+      0.0,
+      0.16666666666666666
+    ]
+  },
+  "held_out_eval_vs_random_baseline": {
+    "n_games": 40,
+    "win_rate": 0.525,
+    "loss_or_illegal_rate": 0.475,
+    "draw_rate": 0.0,
+    "mean_reward": 0.05
+  },
+  "checkpoint_path": "/Data/alfred.ruscher/fugu/checkpoints/phase7_cmaes_kuhn/selection_head.pt",
+  "verdict": "COMPLETE",
+  "note": "Scoped proof-of-concept only (PLAN.md's Verification section: 'Any CMA-ES results (stretch phases) are explicitly reported as scoped proof-of-concept') -- validates that sep-CMA-ES (open_fugu.train.train_cmaes.run_cmaes) can optimize the Fugu orchestrator's selection head against real end-to-end kuhn_poker rewards end-to-end, not a claim about poker strength or about chess (Phase 8's own, much more expensive, still-not-yet-written scope). Opponent is gtbench's own RandomAgent (no LLM, always legal) -- chosen as a cheap fixed baseline to validate the training loop against, not a benchmark. Evolved parameters are the selection head's weight+bias ONLY -- SVF's `z` vectors are frozen at their default no-op value here (see this script's module docstring for why) -- Phase 8 would need to widen the flat parameter vector to include them if full parity with SFT's trainable_parameters() is wanted."
+}

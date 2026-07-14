@@ -99,11 +99,23 @@ def _run_setup() -> None:
     # clone and the same pyspiel install (no extra system deps -- confirmed
     # in this session's sandbox), so this is a pure verification step, not
     # an additional install.
+    # Same LLMBenchLogger-singleton-ordering + langchain-stub wiring
+    # _import_gtbench()/phase7_setup_gtbench.sh's own verification need (see
+    # that script's header comment) -- found the hard way (2026-07-14) when
+    # this exact snippet crashed the same way phase7's setup verification
+    # originally did, before ANY game construction here also claimed the
+    # LLMBenchLogger singleton with a real path first.
     gtbench_path = str(VENDOR_GTBENCH)
+    src_path = str(PROJECT_DIR / "src")
     result = subprocess.run(
         ["/Data/.venv/bin/python3", "-c", f"""
 import sys
+sys.path.insert(0, {src_path!r})
 sys.path.insert(0, {gtbench_path!r})
+from open_fugu.gtbench_ext._langchain_stub import ensure_importable
+ensure_importable()
+from gamingbench.utils.utils import LLMBenchLogger
+LLMBenchLogger({str(LOG_DIR / "phase9_setup_verify.log")!r})
 from gamingbench.games.connect_four import ConnectFour
 from gamingbench.games.breakthrough import Breakthrough
 c = ConnectFour()
