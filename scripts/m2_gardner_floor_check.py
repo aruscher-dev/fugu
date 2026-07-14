@@ -33,9 +33,13 @@ sys.path.insert(0, str(PROJECT_DIR / "scripts"))
 import torch  # noqa: E402
 from disk_guard import check_disk_budget  # noqa: E402
 from open_fugu.chess_blindfold.harness import play_blindfold_vs_engine  # noqa: E402
-from open_fugu.minichess.board import BLACK, WHITE, GardnerBoard  # noqa: E402
+from open_fugu.minichess.board import (  # noqa: E402
+    BLACK, GARDNER_VARIANT_DESCRIPTION, WHITE, GardnerBoard,
+)
 from open_fugu.minichess.engine import GardnerScorer  # noqa: E402
-from open_fugu.models.local_worker import CANDIDATE_WORKERS, LocalWorker, LocalWorkerConfig  # noqa: E402
+from open_fugu.models.local_worker import (  # noqa: E402
+    CANDIDATE_WORKERS, LocalWorker, LocalWorkerConfig, scaled_max_new_tokens,
+)
 
 RESULTS_DIR = PROJECT_DIR / "logs" / "m2_gardner_floor_check"
 
@@ -66,7 +70,13 @@ def run_floor_check_for_worker(short_id: str, model_id: str, max_plies: int) -> 
     print(f"\n=== M2 floor check: {short_id} ({model_id}) ===", flush=True)
     check_disk_budget()  # models here are pre-cached, but be defensive anyway
 
-    worker = LocalWorker(LocalWorkerConfig(model_id=model_id, max_new_tokens=200, temperature=0.4))
+    # This script predates the 2026-07-12 generation-budget fix (Phase 5's
+    # root-cause writeup) and was never re-run after it landed -- the flat
+    # 200-token budget below starved deepseek-r1-distill-qwen-7b's <think>
+    # block the exact same way Phase 0.5 was starved before that fix took it
+    # from 0%/44%/22% to 61%/64%/25%. Matching that fix here.
+    gen_budget = scaled_max_new_tokens(short_id, 200)
+    worker = LocalWorker(LocalWorkerConfig(model_id=model_id, max_new_tokens=gen_budget, temperature=0.4))
     games = []
 
     for g, (opening_name, opening_moves) in enumerate(GARDNER_OPENING_BOOK.items()):
@@ -74,7 +84,7 @@ def run_floor_check_for_worker(short_id: str, model_id: str, max_plies: int) -> 
         scorer = GardnerScorer(depth=ENGINE_FLOOR_DEPTH)
 
         def move_fn(messages):
-            return worker.generate(messages, max_new_tokens=200)
+            return worker.generate(messages, max_new_tokens=gen_budget)
 
         def engine_move_fn(board):
             return scorer.best_move(board)
@@ -89,6 +99,7 @@ def run_floor_check_for_worker(short_id: str, model_id: str, max_plies: int) -> 
                 scorer=scorer,
                 max_plies=max_plies,
                 board_factory=GardnerBoard,
+                variant_description=GARDNER_VARIANT_DESCRIPTION,
             )
         except Exception as e:
             # A single game/model quirk shouldn't take down the whole floor

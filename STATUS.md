@@ -1,11 +1,82 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-14 (cloud dev routine session -- wrote m6, see "Cloud dev routine
-additions (2026-07-14) -- m6 Gardner Minichess sep-CMA-ES pilot" below for the newest
-change; the rest of this doc below is otherwise as of 2026-07-13's m5 session, see that
-section's own note).
+Last updated: 2026-07-14 (manual dev session on `sole`, real GPU access -- re-ran m2's
+floor check and found/fixed a real board-variant-confusion bug, see "Manual dev-session
+fixes (2026-07-14) -- m2 re-run, generation-budget + variant-blindness fixes" below for
+the newest change; the rest of this doc below is otherwise as of the same day's earlier
+cloud dev routine session, see that section's own note).
 
-## Cloud dev routine additions (2026-07-14) -- m6 Gardner Minichess sep-CMA-ES pilot
+## Manual dev-session fixes (2026-07-14) -- m2 re-run, generation-budget + variant-blindness fixes
+
+Session context: host-side automation (crontab + systemd timer on `sole`) had gone
+completely dead (crontab empty, timer disabled, ~7h stale after an apparent reboot) and
+local git had diverged 80/3 commits from `origin` -- both fixed first (git merged
+clean, cron/timer reinstalled). While verifying the fix, found and fixed a second real
+bug: crontab and the systemd timer share an identical 15-minute schedule with no mutual
+exclusion, so re-enabling both made them fire in the same tick and race two concurrent
+`orchestrate.py` invocations against the same git working tree (reproduced live,
+`flock -n` added around the `orchestrate.py` call in both trigger scripts to fix).
+
+With the GPU idle and every phase gate-blocked (Phase 5 / m4 both `false`, correctly,
+per Phase 0.5/m2's own weak floor-check numbers), did a real prompt-engineering pass on
+the minichess track rather than guessing blind:
+
+- **Found `scripts/m2_gardner_floor_check.py` was measuring stale data.** Written
+  2026-07-10, hardcodes `max_new_tokens=200` for every worker, and was **never actually
+  re-run** after the 2026-07-12 generation-budget fix (`scaled_max_new_tokens()`) that
+  took the full-chess floor check from 0%/44%/22% to 61%/64%/25% -- `logs/
+  m2_gardner_floor_check/` didn't even exist on `sole` (never executed here; the
+  0%/0%/0% number in `state.json`/`reports/m2_gardner_floor_check_summary.json` was a
+  stale carry-over from a 2026-07-10 run on `lotte`, before the fix existed at all).
+  Applied the same fix (`scaled_max_new_tokens(short_id, 200)`), matching
+  `phase0_5_blindfold_floor_check.py`'s already-proven pattern exactly.
+- **Re-ran m2 for real -- still 0%/0%/0%, ruling out the generation-budget bug as the
+  (sole) cause on this track.** Read the raw replies
+  (`logs/m2_gardner_floor_check/qwen2.5-7b.json`) rather than re-guessing: every game
+  died on the LLM's very first move, and the raw text showed the model confidently
+  describing a full **standard 8x8 chess starting position** ("King on e1, Queen on d1,
+  Rooks on a1 and h1, Bishops on f1 and g1..." -- entirely fabricated for this board).
+  Root cause: `harness.py`'s prompt never states the board size, piece set, or starting
+  layout at all -- full chess gets away with this because every 7B instruct model has
+  the standard opening baked into its priors; a 7B model has virtually no Gardner
+  Minichess-specific training data, so with zero signal it defaults to standard chess
+  and every move is fantasy for the real (5x5, differently-set-up) position.
+- **Fix: `harness.format_opening_prompt()` gained an optional `variant_description`
+  param** (threaded through `play_blindfold_vs_engine`/`_async`), defaulting to `None`
+  so every existing full-chess caller's prompt text is **verified byte-identical** to
+  before (checked with a direct string-equality assertion, not just "should be fine" --
+  Phase 3/4's already-collected SFT data and `train_sft.py`'s prompt reconstruction from
+  it both depend on this). New `GARDNER_VARIANT_DESCRIPTION` constant in
+  `minichess/board.py` states the real 5x5 board size, exactly-one-of-each-minor-piece
+  setup, and starting square layout -- **facts verified against `pyffish` directly**
+  (`pyffish.start_fen('gardner')` + `pyffish.legal_moves()` from it: confirmed no
+  double-step pawn moves and no castling are legal from ply 1) rather than assumed from
+  general Gardner Minichess trivia, so the description doesn't itself introduce a new
+  wrong-rule failure mode. Wired into `m2_gardner_floor_check.py` and (for future real
+  matches, not just this floor check) `chess_green_agent.py`'s `VARIANT_CONFIGS`.
+- **Re-ran m2 a third time with both fixes: `qwen2.5-7b` 0%, `mistral-7b` 12.5%,
+  `deepseek-r1-distill-qwen-7b` 18.75%** (`reports/m2_gardner_floor_check_summary.json`,
+  regenerated via `orchestrate.write_m2_summary()` against the fresh per-worker logs,
+  not hand-written). Real, non-zero improvement (`mistral`/`deepseek` each got one game
+  several plies deep instead of dying on move 1) confirms the variant-blindness bug was
+  genuinely costing legal moves, not a red herring -- but `qwen2.5-7b` stayed at
+  literally 0%, and even the improved workers are far below the >50% bar. Raw replies
+  post-fix show the model now correctly identifying the 5x5 board/piece types (even
+  attempting an ASCII board render) but still mis-tracking the actual position from the
+  move history (e.g. claiming both colors have pawns on the same square) -- this is now
+  the SAME "Key open risk #3" blindfold-tracking difficulty Phase 0.5 already documented
+  for full chess (which only reached 61/64/25% itself), just harder here since these
+  models have far less Gardner-specific text in their training data than standard chess.
+  **Verdict: still `REVIEW_NEEDED`, correctly** -- `minichess_phases["m4"]
+  .gpu_spend_approved` stays `false`. This is a genuine, now well-diagnosed negative
+  result, not an unresolved engineering bug: the two real bugs found this session
+  (generation budget, variant blindness) are both fixed; what's left is the models'
+  actual blindfold-tracking skill on a low-resource variant, which prompt engineering
+  alone may not close much further. A natural next lever (not yet tried) is a worked
+  few-shot position-tracking example in the prompt -- doesn't violate the paper's
+  blindfold protocol (the example would be a different, unrelated position, not this
+  game's board), but is a genuinely new idea, not a proven pattern like the two fixes
+  above, so flagged rather than done unprompted this session.
 
 Main `phase_order` track: no change this session -- every phase in it still has a
 status other than `not_started` (Phases 5/7/8/9 remain `pending`, gated behind their own

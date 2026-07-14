@@ -42,7 +42,7 @@ from open_fugu.agentbeats.green_executor import GreenAgent, GreenExecutor
 from open_fugu.agentbeats.models import EvalRequest, EvalResult
 from open_fugu.agentbeats.tool_provider import ToolProvider
 from open_fugu.chess_blindfold.harness import play_blindfold_vs_engine_async
-from open_fugu.minichess.board import GardnerBoard
+from open_fugu.minichess.board import GARDNER_VARIANT_DESCRIPTION, GardnerBoard
 from open_fugu.minichess.engine import GardnerScorer
 from open_fugu.reward.stockfish_scorer import StockfishScorer
 
@@ -57,8 +57,10 @@ DEFAULT_OPENING_CHESS = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"]  # Ruy 
 DEFAULT_OPENING_GARDNER = ["c2c3", "b4c3", "b2c3", "b5c3"]
 
 VARIANT_CONFIGS = {
-    "chess": {"board_factory": chess.Board, "default_opening": DEFAULT_OPENING_CHESS},
-    "gardner": {"board_factory": GardnerBoard, "default_opening": DEFAULT_OPENING_GARDNER},
+    "chess": {"board_factory": chess.Board, "default_opening": DEFAULT_OPENING_CHESS,
+              "variant_description": None},
+    "gardner": {"board_factory": GardnerBoard, "default_opening": DEFAULT_OPENING_GARDNER,
+                "variant_description": GARDNER_VARIANT_DESCRIPTION},
 }
 
 
@@ -131,6 +133,7 @@ class ChessBlindfoldGreenAgent(GreenAgent):
                         scorer=scorer,
                         max_plies=max_plies,
                         board_factory=board_factory,
+                        variant_description=variant_cfg["variant_description"],
                     )
                     legal_plies = [p for p in result.plies if p.legal]
                     losses = [p.centipawn_loss for p in legal_plies if p.centipawn_loss is not None]

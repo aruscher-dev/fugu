@@ -90,9 +90,21 @@ MOVE_FORMAT_INSTRUCTION = (
 )
 
 
-def format_opening_prompt(color: str, opening_uci_moves: List[str]) -> str:
+def format_opening_prompt(
+    color: str, opening_uci_moves: List[str], variant_description: Optional[str] = None
+) -> str:
     """Reproduce Listing 1's setup prompt: numbered move pairs in UCI, ending
-    with 'What is your move?'."""
+    with 'What is your move?'.
+
+    `variant_description` overrides the default "you are playing a chess
+    game" framing -- pass e.g. `open_fugu.minichess.board.GARDNER_VARIANT_DESCRIPTION`
+    for a non-standard board. Without it, a model has zero signal that it
+    isn't standard 8x8 chess and reliably hallucinates a standard starting
+    position instead (see that constant's own comment for the 2026-07-14
+    evidence: 0% legal-move rate, every game dying on move 1, raw replies
+    describing a fabricated 8x8 board). Defaults to None so every existing
+    full-chess caller is byte-for-byte unaffected.
+    """
     parts = []
     for i in range(0, len(opening_uci_moves), 2):
         move_no = i // 2 + 1
@@ -100,8 +112,16 @@ def format_opening_prompt(color: str, opening_uci_moves: List[str]) -> str:
         black_mv = opening_uci_moves[i + 1] if i + 1 < len(opening_uci_moves) else ""
         parts.append(f"{move_no}. {white_mv} {black_mv}".strip())
     history_str = " ".join(parts)
+    if variant_description:
+        intro = f"{variant_description} You are playing with {color} pieces."
+    else:
+        # Byte-identical to the pre-2026-07-14 wording -- every existing
+        # full-chess caller (Phase 0.5/1/3/4/5, train_sft.py's prompt
+        # reconstruction from already-collected data) must see the exact
+        # same text as before; only a variant_description changes anything.
+        intro = f"You are playing a chess game and you are playing with {color} pieces."
     return (
-        f"You are playing a chess game and you are playing with {color} pieces. "
+        f"{intro} "
         f"Current move history is {history_str}. What is your move? {MOVE_FORMAT_INSTRUCTION}"
     )
 
@@ -182,6 +202,7 @@ def play_blindfold_vs_engine(
     max_plies: int = 120,
     worker_id: Optional[str] = None,
     board_factory: BoardFactory = chess.Board,
+    variant_description: Optional[str] = None,
 ) -> GameResult:
     """Play one blindfold game: the LLM (via move_fn) against an engine baseline
     (e.g. Stockfish at a fixed skill level) that DOES see the board normally --
@@ -191,15 +212,17 @@ def play_blindfold_vs_engine(
     user/assistant turns) and returns raw text; engine_best_move_fn receives the
     board (real chess.Board by default) and returns its move in UCI (the engine
     is not blindfolded). Pass board_factory=GardnerBoard (from
-    open_fugu.minichess.board) for the 5x5 track -- everything else about the
-    protocol is board-size-agnostic.
+    open_fugu.minichess.board) for the 5x5 track, and
+    variant_description=GARDNER_VARIANT_DESCRIPTION alongside it -- see
+    format_opening_prompt()'s docstring for why the description is required
+    (not optional-nice-to-have) for any non-standard board.
     """
     board = board_factory()
     for mv in opening_uci_moves:
         board.push_uci(mv)
 
     color_name = "white" if llm_color == chess.WHITE else "black"
-    opening_prompt = format_opening_prompt(color_name, opening_uci_moves)
+    opening_prompt = format_opening_prompt(color_name, opening_uci_moves, variant_description)
     plies: List[PlyRecord] = []
     ply_no = len(opening_uci_moves)
 
@@ -276,6 +299,7 @@ async def play_blindfold_vs_engine_async(
     max_plies: int = 120,
     worker_id: Optional[str] = None,
     board_factory: BoardFactory = chess.Board,
+    variant_description: Optional[str] = None,
 ) -> GameResult:
     """Async twin of play_blindfold_vs_engine, for when the LLM side is
     reached over the network (e.g. an A2A call to a purple agent) rather than
@@ -290,7 +314,7 @@ async def play_blindfold_vs_engine_async(
         board.push_uci(mv)
 
     color_name = "white" if llm_color == chess.WHITE else "black"
-    opening_prompt = format_opening_prompt(color_name, opening_uci_moves)
+    opening_prompt = format_opening_prompt(color_name, opening_uci_moves, variant_description)
     plies: List[PlyRecord] = []
     ply_no = len(opening_uci_moves)
 

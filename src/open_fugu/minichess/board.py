@@ -20,6 +20,34 @@ VARIANT = "gardner"
 WHITE = True
 BLACK = False
 
+# 2026-07-14 finding: a re-run of m2's floor check (after ruling out the
+# generation-budget bug that fixed the full-chess track) showed 0% legal-move
+# rate persisted, every game dying on the LLM's very first move. Raw replies
+# (logs/m2_gardner_floor_check/*.json) showed the model confidently describing
+# a full standard 8x8 starting position ("King on e1, Queen on d1, Rooks on a1
+# and h1...") -- harness.py's prompt never says this is a 5x5 variant at all,
+# so a 7B model defaults to its training-dominant assumption (standard chess)
+# and every move it produces is fantasy for the real (tiny, differently-set-up)
+# board. This description is meant to be passed as harness.py's
+# `variant_description` param so the opening prompt states the real board
+# up front. Facts below were verified against pyffish directly (start_fen +
+# legal_moves from it), not assumed from general Gardner Minichess trivia --
+# see the 2026-07-14 session notes for the exact check (no double-step pawn
+# moves and no castling are both available from ply 1).
+GARDNER_VARIANT_DESCRIPTION = (
+    "You are playing Gardner Minichess, a chess variant on a SMALL 5x5 BOARD "
+    "-- NOT standard 8x8 chess. Files run a-e only (no f/g/h) and ranks run "
+    "1-5 only (no 6/7/8). Each side has exactly ONE rook, ONE knight, ONE "
+    "bishop, ONE queen, and ONE king (no second rook/knight/bishop the way "
+    "standard chess has), plus 5 pawns. Starting position: White's back rank "
+    "(rank 1) is a1=rook, b1=knight, c1=bishop, d1=queen, e1=king, with White "
+    "pawns on all of rank 2; Black's back rank (rank 5) is a5=rook, "
+    "b5=knight, c5=bishop, d5=queen, e5=king, with Black pawns on all of rank "
+    "4; rank 3 starts empty. There is no castling, and pawns only ever "
+    "advance one square at a time (no two-square first move, so no en "
+    "passant either)."
+)
+
 
 @dataclass(frozen=True)
 class _UciMove:
