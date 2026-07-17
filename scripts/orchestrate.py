@@ -1237,9 +1237,25 @@ MINICHESS_PHASE_ADVANCERS = {
 
 
 def advance_track(state: dict, phase_order_key: str, phases_key: str, advancers: dict) -> bool:
-    """Advance one independent phase track by (at most) one step, following
-    the same never-block/first-non-done-phase logic as the main track.
-    Returns True if any phase in this track completed this run."""
+    """Advance one independent phase track, following the never-block-forever
+    logic several phases' own docstrings already promise (Phase 7/8/9's:
+    "independent of every other approval chain above ... so this can launch
+    whenever, in whatever order a human prefers"). Returns True if any phase
+    in this track completed this run.
+
+    Only "in_progress" stops the scan for the rest of this tick -- that's a
+    live tmux/GPU job actually running (or one this tick just launched), and
+    the one-machine-at-a-time constraint (STATUS.md) means nothing else
+    should launch alongside it. "blocked" (usually a human gpu_spend_approved
+    sign-off still pending, or a same-track dependency the advancer itself
+    already checks, e.g. advance_phase_6 on Phase 5) launches nothing, so
+    it's safe -- and per the phases' own docs, correct -- to keep checking
+    later phases in the same tick rather than stopping the whole track on the
+    first one still awaiting sign-off. Without this, an already-approved and
+    GPU-completed later phase (e.g. Phase 9, gated independently of Phase 5)
+    would sit at "pending" forever behind an earlier still-blocked phase,
+    even though its own advancer would report "done" the moment it's
+    actually reached."""
     advanced_any = False
     for phase_id in state.get(phase_order_key, []):
         phase = state[phases_key][phase_id]
@@ -1262,8 +1278,11 @@ def advance_track(state: dict, phase_order_key: str, phases_key: str, advancers:
             phase["status"] = "in_progress"
             print(f"[orchestrate] [{phases_key}] phase {phase_id}: in progress, will re-check next run")
             break
+        elif result == "blocked":
+            print(f"[orchestrate] [{phases_key}] phase {phase_id}: blocked, checking later phases in this track")
+            continue
         else:
-            print(f"[orchestrate] [{phases_key}] phase {phase_id}: {result}")
+            print(f"[orchestrate] [{phases_key}] phase {phase_id}: unexpected advancer result {result!r}, stopping track")
             break
     return advanced_any
 

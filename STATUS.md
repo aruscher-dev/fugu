@@ -1,9 +1,74 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-14 (cloud dev routine -- wrote m8, the minichess track's interactive
-HTML demo, PLAN.md's own words for "the actual deliverable"; see "Cloud dev routine
-additions (2026-07-14c) -- m8 interactive HTML demo" below for the newest change; the rest
-of this doc below is otherwise as of the same day's earlier sessions, see their own notes).
+Last updated: 2026-07-17 (cloud dev routine -- no `not_started` phase existed in either
+track this session, so per this loop's own "don't invent busywork" rule it did not write
+a new phase. Instead it found and fixed a real orchestration bug that was silently
+stranding `Phase 9` at `pending` despite real GPU-completed, verdict-`COMPLETE` output;
+see "Cloud dev routine additions (2026-07-17) -- advance_track sequential-block bug"
+immediately below. The rest of this doc is otherwise as of 2026-07-14, see those
+sections' own notes.)
+
+## Cloud dev routine additions (2026-07-17) -- `advance_track` sequential-block bug
+
+**No `not_started` phase exists in `phase_order` or `minichess_phase_order`** (checked
+`state.json` directly -- every entry in both is `done` or `pending`), so this session did
+not write a new phase. While confirming the repo was actually in a consistent state
+(rather than just checking phase statuses at face value) this session found a real
+mismatch: `reports/phase9_summary.json` (tracked, written by the real GPU host on
+2026-07-14) has top-level `"verdict": "COMPLETE"` with `"generated_at":
+"2026-07-14T08:46:59Z"` -- clearly real output (real host checkpoint paths under
+`/Data/alfred.ruscher/fugu/...`, real per-game CMA-ES numbers for all 3 of
+`kuhn_poker`/`connect_four`/`breakthrough`) -- yet `state.json`'s `phases["9"].status` was
+still `"pending"`, even though `last_orchestrate_run` (`2026-07-14T12:30:01Z`) shows the
+GPU host's cron had ticked several times *after* that summary was written.
+
+**Root cause**: `scripts/orchestrate.py`'s `advance_track()` iterated `phase_order` and
+`break`-ed the whole track the moment any phase's advancer returned `"blocked"` --
+stopping at the *first* non-`done` phase in list order (`"5"`, awaiting a human's
+`gpu_spend_approved` sign-off per `reports/phase0_5_summary.json`'s `REVIEW_NEEDED`
+verdict) and never even calling `advance_phase_9` to notice its work was already done.
+This directly contradicts what Phase 7/8/9's own docstrings and this file's own
+"Cloud dev routine additions (2026-07-11c/2026-07-12)" sections already promise: these
+phases are "independent of every other approval chain ... so this can launch whenever, in
+whatever order a human prefers relative to Phase 5/7/8" -- each phase's advancer *already*
+does its own real dependency check (e.g. `advance_phase_6` explicitly checks
+`state["phases"]["5"]["status"] == "done"` itself, `advance_phase_9` has no dependency on
+5/6/7/8 at all), so `advance_track`'s blanket sequential stop was pure surplus
+list-position blocking with no corresponding real dependency behind it for these phases.
+
+**Fix**: `advance_track()` now only `break`s on `"in_progress"` (a live tmux/GPU job
+either already running or just launched this tick -- the actual one-machine-at-a-time
+constraint this project holds, see "Constraints to keep honoring" below) or a truly
+unrecognized advancer result. A `"blocked"` result (nothing launched, safe) now
+`continue`s to check later phases in the same tick instead of halting the track. Verified
+with a **pure-logic dry run against the real, current `state.json`** (a deep copy, never
+persisted or pushed by this session -- no GPU/tmux/model access needed for this, it's
+JSON + string comparisons, the same logic `advance_phase_9` itself already runs): with the
+fix, the same tick that (correctly) still reports phases `5`/`6`/`8` as `blocked` (real
+human sign-off still needed, `gpu_spend_approved` still `false` for both, unchanged by
+this session) now *also* reaches phase `9` and its advancer reports `"DONE"` --
+confirming the fix, not a guess about what `state.json` "should" say. Ran the same dry run
+against `minichess_phase_order` too (no behavior change there currently: `m4` is the first
+`pending` entry and every phase after it is genuinely blocked on `m4`'s own real output,
+which doesn't exist yet, so there was nothing for this fix to unstick in that track today
+-- but the fix protects it going forward, e.g. once `m4`/`m6` need independent sign-off
+the same way Phase 5/8 do here).
+
+**Deliberately did NOT hand-edit `state.json`'s `phases["9"].status` to `"done"` in this
+same commit**, even though the dry run above already computed that exact answer -- this
+loop's own standing instruction is to never set a phase to `done` itself, and the cleanest
+way to honor that here is to let the *real* `orchestrate.py` (now fixed) make that
+determination as part of its normal GPU-host cron run, the same audit trail every other
+`"orchestrate: automated status sync"` commit in `git log` already uses, rather than this
+session pre-empting it by hand from the dry run's output. Expect `phases["9"].status` to
+flip to `"done"` (and a matching `git log` commit) automatically within one GPU-host cron
+tick (`*/15 * * * *`) of this fix being pulled.
+
+**Nothing else changed**: `phases["5"]/["6"]/["8"]` and every `minichess_phases` entry are
+still correctly `blocked`/`pending` behind their own real, unmet gates (human
+`gpu_spend_approved` sign-off, or genuine upstream data that doesn't exist yet) -- this fix
+only removes a *redundant* blocker that had nothing behind it for phases whose own
+advancer already re-derives its true dependency independently.
 
 ## Cloud dev routine additions (2026-07-14c) -- m8 interactive HTML demo
 
