@@ -1,12 +1,22 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-17 (cloud dev routine -- no `not_started` phase existed in either
-track this session, so per this loop's own "don't invent busywork" rule it did not write
-a new phase. Instead it found and fixed a real orchestration bug that was silently
-stranding `Phase 9` at `pending` despite real GPU-completed, verdict-`COMPLETE` output;
-see "Cloud dev routine additions (2026-07-17) -- advance_track sequential-block bug"
-immediately below. The rest of this doc is otherwise as of 2026-07-14, see those
-sections' own notes.)
+Last updated: 2026-07-19 (cloud dev routine -- no `not_started` phase exists in either
+track this session either, so per this loop's own "don't invent busywork" rule no new
+phase was written. Confirmed the 2026-07-17 `advance_track` fix below is already on
+`origin/main` (this session's container had a stale local `main` ref pointing at the
+prior commit, detached HEAD sitting one commit ahead at the real fix -- fast-forwarded
+the local ref only, nothing to push, origin was already correct). **Flagging for a
+human**: `git log` shows zero `orchestrate: automated status sync` commits since
+2026-07-14T12:30 -- five days of silence, including the ~2 days since the 07-17 fix was
+pushed, versus the ~15min cadence every earlier stretch of this project shows. This is
+the same failure signature as the "Manual dev-session fixes (2026-07-14)" incident below
+(`sole.polytechnique.fr`'s crontab + systemd timer both found dead after an apparent
+reboot) -- this cloud sandbox has no access to `sole` to check directly, so this reads as
+the same thing recurring, not confirmed. Until the host-side cron/timer is checked and
+restarted there, Phase 9's already-GPU-completed, verdict-`COMPLETE` data (the actual
+motivation for the 07-17 fix) stays stuck at `state.json`'s `phases["9"].status ==
+"pending"`, and Phase 5 remains awaiting a human's `gpu_spend_approved` sign-off regardless.
+The rest of this doc is otherwise as of 2026-07-17, see those sections' own notes.)
 
 ## Cloud dev routine additions (2026-07-17) -- `advance_track` sequential-block bug
 
