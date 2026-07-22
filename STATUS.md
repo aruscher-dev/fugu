@@ -1,17 +1,17 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-21 (cloud dev routine -- still no `not_started` phase in either
+Last updated: 2026-07-22 (cloud dev routine -- still no `not_started` phase in either
 track, HEAD matches `origin/main` with nothing new to fast-forward, so this session made
 no code changes, per this loop's own "don't invent busywork" rule.
-**Flagging for a human, escalated further**: the GPU-host cron silence first flagged
-2026-07-19 has now run a full week with zero change -- `git log` still shows zero
-`orchestrate: automated status sync` commits since 2026-07-14T12:30, `state.json`'s
-`last_orchestrate_run` is still that same `2026-07-14T12:30:01` timestamp, and
-`reports/phase9_summary.json` still shows real, `COMPLETE`-verdict data generated on the
-GPU host `2026-07-14T08:46:59Z` that `state.json`'s `phases["9"].status` still hasn't
-picked up. That's **seven full days** of silence now, versus the ~15min cadence every
-earlier stretch of this project shows, and no self-recovery across any of the three
-consecutive daily checks (07-19/07-20/07-21) that have now flagged it. This cloud
+**Flagging for a human, escalated further still**: the GPU-host cron silence first
+flagged 2026-07-19 has now run a full **eight days** with zero change -- `git log` still
+shows zero `orchestrate: automated status sync` commits since 2026-07-14T12:30,
+`state.json`'s `last_orchestrate_run` is still that same `2026-07-14T12:30:01` timestamp,
+and `reports/phase9_summary.json` still shows real, `COMPLETE`-verdict data generated on
+the GPU host `2026-07-14T08:46:59Z` that `state.json`'s `phases["9"].status` still hasn't
+picked up (re-checked this session: still `"pending"`). Versus the ~15min cadence every
+earlier stretch of this project shows, and no self-recovery across any of the four
+consecutive daily checks (07-19/07-20/07-21/07-22) that have now flagged it. This cloud
 sandbox has no access to `sole.polytechnique.fr` to check or restart its crontab/systemd
 timer directly -- a human needs to log into that host, confirm cron/the timer died (same
 failure signature as the "Manual dev-session fixes (2026-07-14)" incident below), and
