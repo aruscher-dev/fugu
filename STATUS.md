@@ -1,17 +1,33 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-25 (cloud dev routine -- still no `not_started` phase in either
-track, HEAD matches `origin/main` with nothing new to fast-forward, so this session made
-no code changes, per this loop's own "don't invent busywork" rule.
+Last updated: 2026-07-26 (cloud dev routine -- still no `not_started` phase in either
+track, so this session made no phase/code changes, per this loop's own "don't invent
+busywork" rule. It did fix a real repo-consistency bug it found first, see immediately
+below.
+**Process bug found and fixed this session**: this session's checkout started in a
+*detached HEAD* at `9abda92` (2026-07-25's escalation commit) while the local `main`
+branch ref -- and `origin/main` -- were still stuck at `385dc5c` (2026-07-23's). That
+means the 07-24 (`31fdbd6`) and 07-25 (`9abda92`) escalation commits below were made
+successfully but their `git push` never actually landed on `origin/main` (a plain `git
+push` from a detached HEAD updates no branch) -- silently, since neither prior firing
+appears to have checked the push output against `origin/main` afterward. Both commits
+were still reachable locally (this is a persistent long-lived session/container across
+scheduled firings, not a fresh clone each day), so no work was lost: fixed by
+`git checkout main && git merge --ff-only 9abda92 && git push`, confirmed
+`origin/main` now matches (`git log origin/main` shows `9abda92` as tip). Net effect:
+STATUS.md's 07-24/07-25 escalation updates were invisible on GitHub / to anyone pulling
+`origin/main` (including the GPU host, had its cron been alive to pull) until this fix
+landed just now. Future firings: verify `git rev-parse HEAD` is `main`'s tip and not
+detached before trusting a "nothing to do" read of the repo.
 **Flagging for a human, escalated further still**: the GPU-host cron silence first
-flagged 2026-07-19 has now run a full **eleven days** with zero change -- `git log` still
+flagged 2026-07-19 has now run a full **twelve days** with zero change -- `git log` still
 shows zero `orchestrate: automated status sync` commits since 2026-07-14T12:30,
 `state.json`'s `last_orchestrate_run` is still that same `2026-07-14T12:30:01` timestamp,
 and `reports/phase9_summary.json` still shows real, `COMPLETE`-verdict data generated on
 the GPU host `2026-07-14T08:46:59Z` that `state.json`'s `phases["9"].status` still hasn't
 picked up (re-checked this session: still `"pending"`). Versus the ~15min cadence every
-earlier stretch of this project shows, and no self-recovery across any of the seven
-consecutive daily checks (07-19/07-20/07-21/07-22/07-23/07-24/07-25) that have now
+earlier stretch of this project shows, and no self-recovery across any of the eight
+consecutive daily checks (07-19/07-20/07-21/07-22/07-23/07-24/07-25/07-26) that have now
 flagged it. This cloud sandbox has no access to `sole.polytechnique.fr` to check or restart its
 crontab/systemd timer directly -- a human needs to log into that host, confirm cron/the
 timer died (same failure signature as the "Manual dev-session fixes (2026-07-14)"
