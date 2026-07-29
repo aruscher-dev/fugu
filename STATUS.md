@@ -1,44 +1,42 @@
 # Open-Fugu — Status (living document)
 
-Last updated: 2026-07-28 (cloud dev routine -- still no `not_started` phase in either
+Last updated: 2026-07-29 (cloud dev routine -- still no `not_started` phase in either
 track (`phase_order` and `minichess_phase_order` both re-checked directly against
-`state.json`: every entry is `done` or `pending`), so this session made no phase/code
-changes, per this loop's own "don't invent busywork" rule. Same as the last several
-sessions, it did first verify the repo was actually in a consistent state rather than
-trusting that read at face value -- see immediately below.
-**Recurring git-state issue, again -- same harmless pattern as 07-26/07-27, not a new
-bug**: this session's checkout also started in a *detached HEAD*, this time at `e4bbccf`
-(07-27's escalation commit) while the local `main` branch ref was still stuck at
-`385dc5c` (07-23's). Checked the same way 07-26/07-27 did before assuming anything was
-wrong: `git fetch origin main` showed `origin/main` was **already** at `e4bbccf`
-(`385dc5c..e4bbccf main -> origin/main`, a stale local tracking ref catching up, not a
-new push), so 07-27's push genuinely landed and nothing was lost. Fixed the same
-zero-risk way: `git checkout main && git merge --ff-only origin/main`
-(`Fast-forward, 385dc5c..e4bbccf`). This makes three consecutive sessions now hitting a
-detached-HEAD/stale-`main` checkout at session start -- still worth a human looking at
-the scheduling/checkout mechanism eventually, though it remains harmless every time
-because of the "verify `git rev-parse HEAD` is `main`'s tip, not detached" check 07-26
-added and every session since has followed.
-**Flagging for a human, escalated further still**: the GPU-host cron silence first
-flagged 2026-07-19 has now run a full **fourteen days** with zero change -- `git log`
-still shows zero `orchestrate: automated status sync` commits since 2026-07-14T12:30,
-`state.json`'s `last_orchestrate_run` is still that same `2026-07-14T12:30:01` timestamp,
-and `reports/phase9_summary.json` still shows real, `COMPLETE`-verdict data generated on
-the GPU host `2026-07-14T08:46:59Z` that `state.json`'s `phases["9"].status` still hasn't
-picked up (re-checked this session: still `"pending"`). Versus the ~15min cadence every
-earlier stretch of this project shows, and no self-recovery across any of the ten
-consecutive daily checks (07-19 through 07-28) that have now flagged it. This cloud
-sandbox has no access to `sole.polytechnique.fr` to check or restart its crontab/systemd
-timer directly -- a human needs to log into that host, confirm cron/the timer died (same
-failure signature as the "Manual dev-session fixes (2026-07-14)" incident below), and
-restart it. Until then Phase 9's already-GPU-completed data (the actual motivation for
-the 07-17 fix) stays stuck at `state.json`'s `phases["9"].status == "pending"`, and
-Phase 5 remains awaiting a human's `gpu_spend_approved` sign-off regardless. **This
-session is sending another push notification about this** (fourteen days, ten
-consecutive flags, no self-recovery, and two real GPU-host-approved work items --
-Phase 9's completed-but-unpicked-up data and Phase 5's pending sign-off -- stuck behind
-it) since escalating silently in STATUS.md alone has not prompted a fix across two full
-weeks of daily flags.
+`state.json`: every entry is `done` or `pending`, and cross-checked against PLAN.md's
+phase-sequencing/minichess tables -- every phase 0-9 and m0-m8 PLAN.md describes has a
+matching `state.json` entry and a registered `PHASE_ADVANCERS`/`MINICHESS_PHASE_ADVANCERS`
+function, nothing missing), so this session made no phase/code changes, per this loop's
+own "don't invent busywork" rule.
+**Recurring git-state issue, again -- same harmless pattern as 07-26 through 07-28, not
+a new bug**: this session's checkout also started in a *detached HEAD*, this time at
+`852bc55` (07-28's escalation commit) while the local `main` branch ref was still stuck
+at `385dc5c` (07-23's). Checked the same way the last several sessions did before
+assuming anything was wrong: `git fetch origin main` showed `origin/main` was
+**already** at `852bc55` (`385dc5c..852bc55 main -> origin/main`, a stale local tracking
+ref catching up, not a new push), so 07-28's push genuinely landed and nothing was lost.
+Fixed the same zero-risk way: `git checkout main && git merge --ff-only origin/main`
+(`Fast-forward, 385dc5c..852bc55`). Still worth a human looking at the
+scheduling/checkout mechanism eventually (four consecutive sessions now), though it
+remains harmless every time because of the "verify `git rev-parse HEAD` is `main`'s
+tip, not detached" check 07-26 added and every session since has followed.
+**GPU-host cron silence -- still unresolved, now fifteen days**: first flagged
+2026-07-19, `git log` still shows zero `orchestrate: automated status sync` commits
+since 2026-07-14T12:30, `state.json`'s `last_orchestrate_run` is still that same
+2026-07-14T12:30:01 timestamp, and every file under `reports/` (including
+`phase9_summary.json`, whose `COMPLETE`-verdict data the GPU host generated
+2026-07-14T08:46:59Z) still has the exact same `mtime` (2026-07-24T06:23) as 07-28's
+check -- confirming zero new activity from the GPU host in the last 24h, not just an
+unchanged day-count. `state.json`'s `phases["9"].status` is still `"pending"` despite
+that completed data. No self-recovery across eleven consecutive daily checks (07-19
+through 07-29) now. **Not sending another push notification this session**: the
+underlying condition and evidence are byte-for-byte the same as 07-28's already-flagged
+report (same commit range, same file timestamps, same stuck fields) -- eleven identical
+daily pushes about one known, human-actionable-only problem (a human needs
+`sole.polytechnique.fr` shell access to restart its cron/timer; this sandbox has none)
+risks the escalation being tuned out rather than acted on. This note keeps the paper
+trail current in STATUS.md/git history; a fresh push notification will go out the next
+time this check finds something actually new (the cron resuming, or a milestone --
+e.g. three weeks -- worth a harder escalation).
 The rest of this doc is otherwise as of 2026-07-17, see those sections' own notes.)
 
 ## Cloud dev routine additions (2026-07-17) -- `advance_track` sequential-block bug
