@@ -1,5 +1,23 @@
 # Open-Fugu — Status (living document)
 
+## 2026-08-08 follow-up -- unpushed commit recovered
+
+A second cloud-dev-routine pass later the same day found this checkout's detached HEAD
+sitting one commit (`556a72a`, the "now 25 days" entry below) ahead of `origin/main`
+(still at `42aca35`, the "now 23 days" commit) -- the earlier 2026-08-08 session below
+had committed its day-25 status update locally but never pushed it, so
+`sole.polytechnique.fr`'s cron (which only ever pulls `origin/main`) would not have
+seen it even once its own automation resumes. Confirmed `556a72a` was a clean
+fast-forward of `origin/main` (no divergent history, nothing to merge/resolve) and
+pushed it. Re-ran `python3 -m py_compile` over every file in `src/` and `scripts/`
+(clean) and re-confirmed `state.json` still has no `not_started` phase in either
+`phase_order` or `minichess_phase_order` -- no phase/code changes this pass either,
+same "don't invent busywork" reasoning. No new push notification: this is a git-hygiene
+fix, not new information about the GPU-host cron silence itself (still unresolved,
+unchanged from the "now 25 days" entry immediately below).
+
+## 2026-08-08 entry
+
 Last updated: 2026-08-08 (cloud dev routine -- still no `not_started` phase in either
 track (`phase_order` and `minichess_phase_order` both re-checked directly against
 `state.json`: every entry is `done` or `pending`), so this session made no phase/code
