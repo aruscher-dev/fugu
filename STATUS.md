@@ -1,5 +1,40 @@
 # Open-Fugu — Status (living document)
 
+Last updated: 2026-08-08 (cloud dev routine -- still no `not_started` phase in either
+track (`phase_order` and `minichess_phase_order` both re-checked directly against
+`state.json`: every entry is `done` or `pending`), so this session made no phase/code
+changes, per this loop's own "don't invent busywork" rule. Also re-verified repo
+consistency beyond just phase statuses: `python3 -m py_compile` over every file in
+`src/` and `scripts/` passes clean, `PLAN.md` still unchanged since 2026-07-14 with
+every phase 0-9/m0-m8 it describes still matching a `state.json` entry and a
+registered `PHASE_ADVANCERS`/`MINICHESS_PHASE_ADVANCERS` function, and
+`reports/phase9_summary.json`'s `COMPLETE` verdict is (still, expectedly) not yet
+reflected in `state.json`'s `phases["9"].status` -- unchanged from the 07-17
+`advance_track` fix's own accounting, since that fix only takes effect once the real
+GPU-host `orchestrate.py` next runs, which it still hasn't (see below).
+**Git-state check**: this session's checkout was already a clean detached HEAD exactly
+matching `origin/main` (`42aca35`, no stale local `main` ref this time, no fetch/merge
+needed) -- the recurring stale-ref pattern earlier sessions kept hitting and fixing did
+not recur today.
+**GPU-host cron silence -- still unresolved, now twenty-five days.** First flagged
+2026-07-19. `git log` still shows zero `orchestrate: automated status sync` commits
+since `028cd9a` (2026-07-14T12:30:01), which still matches `state.json`'s
+`last_orchestrate_run` exactly -- `sole.polytechnique.fr`'s cron has not run anything
+in 25 days. No self-recovery across every daily check from 07-19 through this session.
+**Not sending another push notification this session**: the last one went out on
+08-03 ("day twenty"), and nothing about this condition has changed since then (same
+stuck `last_orchestrate_run`, same `phases["9"].status`, zero new host commits, same
+report files at the same 2026-07-14 generation timestamps) -- a repeat notification
+today would just echo what the human already knows. A human still needs
+`sole.polytechnique.fr` shell access to check/restart its cron or systemd timer; this
+sandbox has no path to that host at all. Once the cron resumes (`last_orchestrate_run`
+moves past `2026-07-14T12:30:01` and/or new `orchestrate: automated status sync`
+commits appear), the next session should send a follow-up all-clear notification and
+note the resolution here.
+The rest of this doc is otherwise as of 2026-07-17, see those sections' own notes.)
+
+## 2026-08-06 entry (superseded by above, kept for history)
+
 Last updated: 2026-08-06 (cloud dev routine -- still no `not_started` phase in either
 track (`phase_order` and `minichess_phase_order` both re-checked directly against
 `state.json`: every entry is `done` or `pending`, cross-checked against PLAN.md's
