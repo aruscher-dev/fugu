@@ -1,5 +1,44 @@
 # Open-Fugu — Status (living document)
 
+## 2026-08-09 entry
+
+Last updated: 2026-08-09 (cloud dev routine -- still no `not_started` phase in either
+track: every `phase_order` entry (`0`-`9`) is `done` or `pending`, every
+`minichess_phase_order` entry (`m0`-`m8`) is `done` or `pending`, so this session made
+no phase/code changes, per this loop's own "don't invent busywork" rule.
+**Git-state fix this session**: the checkout was in a detached HEAD one commit behind
+where it needed to be attached -- `origin/main` (`68e6f95`) already had both of the
+prior 2026-08-08 session's commits (verified via `git fetch`; the "recover and push"
+commit's own claim to have pushed was correct, a stale local `git branch -a -v` read
+before fetching briefly looked otherwise). Ran `git checkout main && git merge
+--ff-only origin/main` so the local `main` branch (not a detached ref) now points at
+`origin/main` exactly -- a clean, non-destructive fast-forward, no divergent history.
+Doing this each session (rather than leaving the checkout detached) is what avoids
+repeating the exact "commit landed on a detached HEAD, never reachable from `main`
+until a later session notices and recovers it" pattern that produced the last two
+days' recovery commits.
+Also re-verified repo consistency: `python3 -m py_compile` over every file in `src/`
+and `scripts/` passes clean; `PHASE_ADVANCERS`/`MINICHESS_PHASE_ADVANCERS` in
+`scripts/orchestrate.py` still register exactly one advancer per `state.json` phase
+entry in both tracks, with no gaps.
+**GPU-host cron silence -- still unresolved, now twenty-six days.** First flagged
+2026-07-19. `state.json`'s `last_orchestrate_run` is still `2026-07-14T12:30:01Z`
+(unchanged) and `reports/*.json` show no generation activity past that same date --
+`sole.polytechnique.fr`'s cron has not run anything in 26 days, with no self-recovery
+across every daily check from 07-19 through this session.
+**Not sending another push notification this session**: the last one went out on
+08-03 ("day twenty"), and nothing about this condition has changed since then (same
+stuck `last_orchestrate_run`, same unresolved `phases["9"].status`/`COMPLETE`
+accounting gap, zero new host commits) -- a repeat notification today would just echo
+what the human already knows. A human still needs `sole.polytechnique.fr` shell access
+to check/restart its cron or systemd timer; this sandbox has no path to that host at
+all. Once the cron resumes (`last_orchestrate_run` moves past
+`2026-07-14T12:30:01` and/or new `orchestrate: automated status sync` commits appear),
+the next session should send a follow-up all-clear notification and note the
+resolution here.
+The rest of this doc is otherwise as of 2026-08-08 (see below) / 2026-07-17, see those
+sections' own notes.
+
 ## 2026-08-08 follow-up -- unpushed commit recovered
 
 A second cloud-dev-routine pass later the same day found this checkout's detached HEAD
