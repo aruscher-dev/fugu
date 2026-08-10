@@ -1,5 +1,47 @@
 # Open-Fugu — Status (living document)
 
+## 2026-08-10 entry
+
+Last updated: 2026-08-10 (cloud dev routine -- still no `not_started` phase in either
+track: every `phase_order` entry (`0`-`9`) is `done` or `pending`, every
+`minichess_phase_order` entry (`m0`-`m8`) is `done` or `pending`, so this session made
+no phase/code changes, per this loop's own "don't invent busywork" rule. Cross-checked
+`PHASE_ADVANCERS`/`MINICHESS_PHASE_ADVANCERS` in `scripts/orchestrate.py` programmatically
+against `state.json`'s `phase_order`/`minichess_phase_order` (set-difference both ways,
+not just eyeballing) -- exact 1:1 match, no gaps either direction. `python3 -m
+py_compile` over every file in `src/` and `scripts/` passes clean.
+**Git-state note (recurring pattern, false alarm this time):** this session's checkout
+started detached at `6c123d0`, three commits ahead of the *local* `main`/`origin/main`
+refs as read before fetching (`42aca35`, "day 23") -- looked identical to the real
+unpushed-commit incident recovered on 08-08. This time it wasn't one: `git fetch origin
+main` showed `origin/main` was already at `6c123d0` -- the local remote-tracking ref
+was simply stale from before this session's fetch, nothing was ever at risk on the
+remote. Fixed with the usual zero-risk fast-forward (`git checkout main && git merge
+--ff-only 6c123d0`); no push was needed or made for this fix. Worth naming explicitly
+since it's easy to mistake for the 08-08 case at a glance -- the distinguishing check is
+always "does `git fetch` change what `origin/main` resolves to," not just "is local
+`main` behind HEAD."
+**GPU-host cron silence -- still unresolved, now twenty-seven days (one week since the
+last push notification).** First flagged 2026-07-19; still stuck at `state.json`'s
+`last_orchestrate_run: 2026-07-14T12:30:01Z` and the last real `orchestrate: automated
+status sync` commit (`028cd9a`, same timestamp) -- confirmed via `git log --grep`, not
+just eyeballing `reports/*.json` mtimes (those reflect this checkout's clone time, not
+generation time). Zero self-recovery across 27 consecutive daily checks now.
+**Sending a push notification this session.** The last one went out 2026-08-03 ("day
+twenty"); it is now a full week later with no change whatsoever -- same stuck
+`last_orchestrate_run`, same unresolved `phases["9"].status`/`COMPLETE` accounting gap,
+zero new host commits, zero sign `sole.polytechnique.fr`'s cron or systemd timer has
+recovered on its own. Per that day-20 notification's own reasoning (waiting on an
+arbitrary threshold doesn't help once the condition is this stale), a week of silence
+after the last ping is the trigger this time rather than another fixed day-count
+milestone. A human still needs `sole.polytechnique.fr` shell access to check/restart
+its cron/timer; this sandbox has no path to that host at all. Once the cron resumes
+(`last_orchestrate_run` moves past `2026-07-14T12:30:01` and/or new `orchestrate:
+automated status sync` commits appear), the next session should send a follow-up
+all-clear notification and note the resolution here.
+The rest of this doc is otherwise as of 2026-08-09 (see below) / 2026-07-17, see those
+sections' own notes.
+
 ## 2026-08-09 entry
 
 Last updated: 2026-08-09 (cloud dev routine -- still no `not_started` phase in either
