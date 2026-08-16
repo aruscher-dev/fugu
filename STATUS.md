@@ -56,8 +56,24 @@ whether `sole.polytechnique.fr`'s own git remote/cron needs updating to match --
 GitHub redirects are not permanent (they break if the old name is ever reclaimed by a
 different repo), so the GPU host silently relying on the redirect is a latent risk on
 top of the 33-day cron-silence issue above, not a fix for it.
-The rest of this doc is otherwise as of 2026-08-15 (see below) / 2026-07-17, see those
-sections' own notes.
+**Follow-up this session (later same day): repo-move independently confirmed via the
+GitHub API**, not just the earlier `git push` message. `get_file_contents` against
+`Warsea12-ai/fugu` (this session's own configured repo scope) now returns `html_url`
+values rooted at `https://github.com/aruscher-dev/fugu/...` for every entry -- the API
+itself, not just the git transport layer, resolves the old name to the new one. A
+no-op `git push origin main` (nothing to push, already up to date) went through
+clean with no repeated moved-repo message this time, and a plain `git fetch`/API reads
+both worked transparently through the redirect -- so this rename by itself does not
+look like a plausible *cause* of the 33-day cron silence (reads/writes both still work
+fine under the old name for now), just a separate, independently-confirmed fact a
+human should still verify was intentional. **Sending a push notification this session**
+covering both this confirmed repo-move and the ongoing 33-day cron silence together --
+the repo-move is new confirmed information no prior notification has covered, and
+today (2026-08-16) is also the eve of the cron-silence week-follow-up threshold noted
+above (2026-08-17), so bundling both into one notification now rather than sending two
+separate ones a day apart. No phase/code changes made this pass either (re-verified:
+still zero `not_started` entries in either track, `py_compile` clean) -- pure
+verification + notification pass.
 
 ## 2026-08-15 entry
 
