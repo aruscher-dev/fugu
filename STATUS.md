@@ -40,6 +40,22 @@ extend the quiet period further. Once the cron resumes (`last_orchestrate_run` m
 past `2026-07-14T12:30:01` and/or new `orchestrate: automated status sync` commits
 appear), the next session should send a follow-up all-clear notification and note the
 resolution here instead.
+**New this session -- GitHub reports the repo moved.** `git push` to the configured
+remote (`https://github.com/Warsea12-ai/fugu`, per this session's repository scope)
+succeeded, but GitHub's own response included: `This repository moved. Please use the
+new location: https://github.com/aruscher-dev/fugu.git`. The push itself went through
+fine (GitHub transparently redirects), and `git remote -v` in this checkout still shows
+the old `Warsea12-ai/fugu` URL -- deliberately NOT changed by this session, since this
+sandbox's GitHub access/credentials are scoped to `Warsea12-ai/fugu` specifically and
+swapping the remote here could break this session's own push access without first
+confirming the new owner has equivalent access configured. This is new information no
+prior entry has recorded. Two things a human should check: (1) whether this transfer
+(`Warsea12-ai` -> `aruscher-dev`) was intentional, since `aruscher-dev` plausibly
+belongs to this project's own maintainer rather than an unexpected third party; (2)
+whether `sole.polytechnique.fr`'s own git remote/cron needs updating to match --
+GitHub redirects are not permanent (they break if the old name is ever reclaimed by a
+different repo), so the GPU host silently relying on the redirect is a latent risk on
+top of the 33-day cron-silence issue above, not a fix for it.
 The rest of this doc is otherwise as of 2026-08-15 (see below) / 2026-07-17, see those
 sections' own notes.
 
