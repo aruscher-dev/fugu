@@ -1,5 +1,53 @@
 # Open-Fugu — Status (living document)
 
+## 2026-09-07 entry
+
+Last updated: 2026-09-07 (cloud dev routine -- still no `not_started` phase in either
+track: every `phase_order` entry (`0`-`9`) is `done` or `pending`, every
+`minichess_phase_order` entry (`m0`-`m8`) is `done` or `pending`, so this session made
+no phase/code changes, per this loop's own "don't invent busywork" rule. Re-verified
+repo consistency programmatically: `PHASE_ADVANCERS`/`MINICHESS_PHASE_ADVANCERS` in
+`scripts/orchestrate.py` exactly 1:1 match `state.json`'s `phase_order`/
+`minichess_phase_order` in both directions (`0`-`9`/`0.5`/`4.5` and `m0`-`m8` all
+present, no gaps either direction); `python3 -m py_compile` clean over every tracked
+`.py` file in `src/` and `scripts/`; every `reports/*.json`'s `generated_at` unchanged
+from every prior entry (latest is still `phase9_summary.json` at
+`2026-07-14T08:46:59Z`).
+**Git-state note:** checkout started detached at `3fe5bf5` (yesterday's tip), with
+local `main` stale two commits behind at `24a90bd`. `git fetch origin main` confirmed
+`origin/main` was also at `3fe5bf5` -- nothing local-only, nothing at risk. Fixed with
+the usual zero-risk fast-forward (`git checkout main && git merge --ff-only
+origin/main`); no push needed for this fix.
+**GPU-host cron silence -- still unresolved, now fifty-five days** (by
+`last_orchestrate_run`, 2026-07-14 -> 2026-09-07). First flagged 2026-07-19.
+`state.json`'s `last_orchestrate_run` is still `2026-07-14T12:30:01Z` (unchanged); an
+anchored `git log --grep="^orchestrate: automated status sync" -E` still shows zero
+real sync commits reachable from `main` (the true last real sync commit, `028cd9a`, is
+dangling/unreachable, same as every prior entry that checked it), with nothing since.
+`sole.polytechnique.fr`'s cron has not run anything in 55 days, zero self-recovery
+across every daily check from 07-19 through this session.
+`reports/phase9_summary.json`'s `COMPLETE` verdict (generated 2026-07-14T08:46:59Z by
+the real GPU host) is still not reflected in `state.json`'s `phases["9"].status` (still
+`pending`) -- expected, unchanged from every prior entry. Re-confirmed the 2026-08-16
+repo-move via the GitHub API this session (`list_commits` on this session's configured
+scope `Warsea12-ai/fugu` still returns `html_url`s rooted at
+`https://github.com/aruscher-dev/fugu/...`) -- no new development on that front,
+consistent with every check since 08-16; local `git remote -v` still shows the old
+`Warsea12-ai/fugu` URL, deliberately unchanged (this sandbox's GitHub access is scoped
+to that name specifically).
+**Not sending another push notification this session**: the last one went out
+2026-09-01, six days ago, and nothing about either condition has changed since then
+(same stuck `last_orchestrate_run`, zero new host commits, same report-generation
+timestamps, no new repo-move development, remote still `Warsea12-ai/fugu`) -- per this
+loop's own established policy (a repeat notification is for new information or a
+week's further silence, not a duplicate echo of what the human already knows), today
+doesn't clear either bar (a week from 2026-09-01 is 2026-09-08, one day from now).
+A human still needs `sole.polytechnique.fr` shell access to check/restart its cron or
+systemd timer; this sandbox has no path to that host at all. Next repeat-notification
+threshold (absent any change) remains 2026-09-08, as the prior entry set -- the next
+session is the one that reaches it and should send the week-overdue notification if
+the silence is still unresolved then.
+
 ## 2026-09-06 entry
 
 Last updated: 2026-09-06 (cloud dev routine -- still no `not_started` phase in either
