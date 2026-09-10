@@ -1,5 +1,56 @@
 # Open-Fugu — Status (living document)
 
+## 2026-09-10 entry
+
+Last updated: 2026-09-10 (cloud dev routine -- still no `not_started` phase in either
+track: every `phase_order` entry (`0`-`9`) is `done` or `pending`, every
+`minichess_phase_order` entry (`m0`-`m8`) is `done` or `pending`, so this session made
+no phase/code changes, per this loop's own "don't invent busywork" rule. Re-verified
+repo consistency programmatically: `PHASE_ADVANCERS`/`MINICHESS_PHASE_ADVANCERS` in
+`scripts/orchestrate.py` exactly 1:1 match `state.json`'s `phase_order`/
+`minichess_phase_order` in both directions; `python3 -m py_compile` clean over every
+tracked `.py` file in `src/` and `scripts/`; every `reports/*.json`'s `generated_at`
+unchanged from every prior entry (latest is still `phase9_summary.json` at
+`2026-07-14T08:46:59Z`).
+**Git-state note (this session found and fixed a real gap):** the checkout started in
+a **detached HEAD** at `7f0dca3`, one commit ahead of local `main` (`cb0b497`) --
+yesterday's (2026-09-09) session had committed its STATUS.md update but the checkout
+was left detached rather than on `main`. `git fetch origin main` showed `origin/main`
+was already at `7f0dca3` (the prior session *did* push successfully; only the local
+branch pointer was stale/detached, not a lost-work situation). Fixed by
+`git checkout main && git merge --ff-only 7f0dca3`, confirmed fast-forward with no
+divergence, then verified `origin/main` still matched after re-fetching. No data was
+at risk, but future sessions should double check `git status`/`git branch` for a
+detached-HEAD start before assuming `main` reflects the last session's work.
+**GPU-host cron silence -- still unresolved, now fifty-eight days** (by
+`last_orchestrate_run`, 2026-07-14 -> 2026-09-10). First flagged 2026-07-19.
+`state.json`'s `last_orchestrate_run` is still `2026-07-14T12:30:01Z` (unchanged); an
+anchored `git log --all --grep="^orchestrate: automated status sync" -E` still shows
+zero real sync commits reachable from any local ref, with nothing since. The old
+dangling commit `028cd9a` referenced in prior entries is no longer even a resolvable
+object in this checkout (consistent with "unreachable" -- likely pruned), which is
+expected and not itself new information. `sole.polytechnique.fr`'s cron has not run
+anything in 58 days, zero self-recovery across every daily check from 07-19 through
+this session. `reports/phase9_summary.json`'s `COMPLETE` verdict (generated
+2026-07-14T08:46:59Z by the real GPU host) is still not reflected in `state.json`'s
+`phases["9"].status` (still `pending`) -- expected, unchanged. `git remote -v` still
+shows the old `Warsea12-ai/fugu` URL, deliberately unchanged (this sandbox's GitHub
+access is scoped to that name specifically) -- consistent with every check since the
+2026-08-16 repo-move finding, no new development re-confirmed this session.
+**Not sending a push notification this session**: the last one went out 2026-09-08,
+two days ago, and nothing about either condition has changed since then (same stuck
+`last_orchestrate_run`, zero new host commits, same report-generation timestamps, no
+new repo-move development, remote still `Warsea12-ai/fugu`) -- per this loop's own
+established policy (a repeat notification is for new information or a week's further
+silence, not a duplicate echo of what the human already knows), today doesn't clear
+either bar (a week from 2026-09-08 is 2026-09-15, five days from now). A human still
+needs `sole.polytechnique.fr` shell access to check/restart its cron or systemd timer;
+this sandbox has no path to that host at all. Once the cron resumes
+(`last_orchestrate_run` moves past `2026-07-14T12:30:01` and/or new `orchestrate:
+automated status sync` commits appear), the next session should send a follow-up
+all-clear notification and note the resolution here instead. Next repeat-notification
+threshold (absent any change) remains 2026-09-15, as the prior entry set.
+
 ## 2026-09-09 entry
 
 Last updated: 2026-09-09 (cloud dev routine -- still no `not_started` phase in either
