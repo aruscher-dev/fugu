@@ -1,5 +1,45 @@
 # Open-Fugu — Status (living document)
 
+## 2026-09-13 entry
+
+Last updated: 2026-09-13 (cloud dev routine -- still no `not_started` phase in either
+track: every `phase_order` entry (`0`-`9`) is `done` or `pending`, every
+`minichess_phase_order` entry (`m0`-`m8`) is `done` or `pending`, so this session made
+no phase/code changes, per this loop's own "don't invent busywork" rule. Re-verified
+`python3 -m py_compile` clean over every tracked `.py` file in `src/` and `scripts/`;
+`grep -c not_started state.json` is `0`; every `reports/*.json` on disk unchanged from
+every prior entry (latest is still `phase9_summary.json` at `2026-07-14T08:46:59Z`).
+**Git-state note:** checkout started detached at `5bd0649` (yesterday's tip), with
+local `main` stale four commits behind at `cb0b497`. `git fetch origin main` confirmed
+`origin/main` was also at `5bd0649` -- nothing local-only, nothing at risk. Fixed with
+the usual zero-risk fast-forward (`git checkout main && git merge --ff-only
+origin/main`); no push needed for this fix.
+**GPU-host cron silence -- still unresolved, now sixty-one days** (by
+`last_orchestrate_run`, 2026-07-14 -> 2026-09-13). First flagged 2026-07-19.
+`state.json`'s `last_orchestrate_run` is still `2026-07-14T12:30:01Z` (unchanged); an
+anchored `git log --all --grep="^orchestrate: automated status sync" -E` still shows
+zero real sync commits reachable from any local ref, with nothing since.
+`sole.polytechnique.fr`'s cron has not run anything in 61 days, zero self-recovery
+across every daily check from 07-19 through this session. `reports/phase9_summary.json`'s
+`COMPLETE` verdict (generated 2026-07-14T08:46:59Z by the real GPU host) is still not
+reflected in `state.json`'s `phases["9"].status` (still `pending`) -- expected,
+unchanged. `git remote -v` still shows the old `Warsea12-ai/fugu` URL, deliberately
+unchanged (this sandbox's GitHub access is scoped to that name specifically); no new
+repo-move development to re-confirm this session (last re-confirmed 2026-09-11).
+**Not sending a push notification this session**: the last one went out 2026-09-08,
+five days ago, and nothing about either condition has changed since then (same stuck
+`last_orchestrate_run`, zero new host commits, same report-generation timestamps, no
+new repo-move development, remote still `Warsea12-ai/fugu`) -- per this loop's own
+established policy (a repeat notification is for new information or a week's further
+silence, not a duplicate echo of what the human already knows), today doesn't clear
+either bar (a week from 2026-09-08 is 2026-09-15, two days from now). A human still
+needs `sole.polytechnique.fr` shell access to check/restart its cron or systemd timer;
+this sandbox has no path to that host at all. Once the cron resumes
+(`last_orchestrate_run` moves past `2026-07-14T12:30:01` and/or new `orchestrate:
+automated status sync` commits appear), the next session should send a follow-up
+all-clear notification and note the resolution here instead. Next repeat-notification
+threshold (absent any change) remains 2026-09-15, as the prior entry set.
+
 ## 2026-09-12 entry
 
 Last updated: 2026-09-12 (cloud dev routine -- still no `not_started` phase in either
