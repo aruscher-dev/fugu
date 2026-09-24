@@ -1,5 +1,33 @@
 # Open-Fugu — Status (living document)
 
+## 2026-09-24 entry
+
+Last updated: 2026-09-24 (cloud dev routine -- still no `not_started` phase in either
+track: every `phase_order` entry (`0`-`9`) is `done` or `pending`, every
+`minichess_phase_order` entry (`m0`-`m8`) is `done` or `pending`, so this session made
+no phase/code changes, per this loop's own "don't invent busywork" rule. Re-verified
+`python3 -m py_compile` clean over every tracked `.py` file in `src/` and `scripts/`;
+`PHASE_ADVANCERS`/`MINICHESS_PHASE_ADVANCERS` in `scripts/orchestrate.py` exactly 1:1
+match `state.json`'s `phase_order`/`minichess_phase_order` in both directions; every
+`reports/*.json` on disk unchanged from every prior entry (latest is still
+`phase9_summary.json` at `2026-07-14T08:46:59Z`). `git fetch origin main` confirmed
+local `main` and `origin/main` both at `d2d3306` (yesterday's tip) -- no divergence,
+no push conflict to reconcile.
+**GPU-host cron silence -- still unresolved, now seventy-one days** (by
+`last_orchestrate_run`, 2026-07-14 -> 2026-09-24; the day-count doesn't tick to 72
+until past 12:30 UTC today, since `last_orchestrate_run`'s time-of-day is 12:30:01).
+`state.json`'s `last_orchestrate_run` is still `2026-07-14T12:30:01Z` (unchanged).
+`sole.polytechnique.fr`'s cron has not run anything in over two months, zero
+self-recovery across every daily check from 07-19 through this session.
+**No new push notification this session**: the last repeat went out 2026-09-22, and
+this loop's established weekly-repeat policy (a repeat only at the week mark, or
+immediately on any material change) puts the next threshold at 2026-09-29. No new
+information surfaced today (same stuck `last_orchestrate_run`, same report-generation
+timestamps, no local/remote divergence), so silence is the correct choice again today.
+Once the cron resumes (`last_orchestrate_run` moves past `2026-07-14T12:30:01`), the
+next session should send an all-clear notification immediately and note the
+resolution here instead.
+
 ## 2026-09-23 entry
 
 Last updated: 2026-09-23 (cloud dev routine -- still no `not_started` phase in either
